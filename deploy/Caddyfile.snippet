@@ -1,0 +1,21 @@
+# 追加到 /etc/caddy/Caddyfile（生产机；IP 勿写死在公开仓库）
+# 需在 /etc/caddy/cf.env 增加 CF_CDK_TOKEN=<gptcdk.ai zone API token>
+# 生产域名：gptcdk.ai（CF zone 与 tools/cf_dns.env 的 CF_CDK_*）
+
+gptcdk.ai, www.gptcdk.ai {
+    tls {
+        dns cloudflare {env.CF_CDK_TOKEN}
+    }
+    encode zstd gzip
+    @blocked_sensitive path /.env* /app.env* /.git/*
+    handle @blocked_sensitive {
+        respond 404
+    }
+    # 全部反代到 CDK（SPA 由 Go WEB_DIR 托管）
+    reverse_proxy 127.0.0.1:9080 {
+        header_up X-Real-IP {client_ip}
+        header_up CF-Connecting-IP {client_ip}
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host {host}
+    }
+}

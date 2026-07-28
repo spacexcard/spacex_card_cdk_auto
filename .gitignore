@@ -1,0 +1,74 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.so.*
+*.dylib
+*.o
+*.a
+*.out
+
+# Build directories
+dist/
+build/
+bin/
+
+# Dependencies
+node_modules/
+vendor/
+/go.sum
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# Runtime
+tmp/
+temp/
+*.pid
+*.seed
+
+# OS
+Thumbs.db
+.AppleDouble
+.LSOverride
+
+# Database (contains submitted sessions / access tokens)
+data/*.db
+data/*.db.bak
+*.sqlite
+*.sqlite3
+
+# Sensitive sessions / tokens
+**/session
+session
+cookies.json
+__pycache__/
+*.pyc
+
+# secrets / runtime
+tools/session.json
+data/
+*.db
+*.db.bak
+backend/main
+backend/server
+backend/cdk-recharge
+
+# Git push credentials (never commit)
+.push.env
+.push.env.local

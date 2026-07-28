@@ -1,0 +1,21 @@
+[data-surface="public"] {
+  --bg: #140b08;
+  --surface: #21120d;
+  --surface-2: #2b1811;
+  --brd: rgba(255, 190, 135, .15);
+  --brd-2: rgba(255, 133, 74, .42);
+  --ink: #fff3e8;
+  --ink-2: #cba58d;
+  --ink-3: #806759;
+  --accent: #ff854a;
+  --accent-2: #ffd166;
+  --accent-soft: rgba(255, 133, 74, .12);
+  --accent-line: rgba(255, 133, 74, .55);
+  --accent-glow: rgba(255, 133, 74, .28);
+}
+
+[data-surface="public"] {
+  background-image:
+    radial-gradient(900px 480px at 50% -8%, rgba(255, 133, 74, .12), transparent 62%),
+    radial-gradient(700px 500px at 108% 12%, rgba(255, 209, 102, .08), transparent 60%);
+}

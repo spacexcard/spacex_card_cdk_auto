@@ -1,0 +1,488 @@
+<template>
+  <div class="min-h-screen py-12">
+    <div class="max-w-3xl mx-auto px-6">
+      <div class="mb-8 flex items-start justify-between gap-4">
+        <div>
+          <router-link to="/" class="app-link mb-4 inline-block text-sm">{{ t('common.back') }}</router-link>
+          <h1 class="text-3xl font-bold text-ink mb-1">CDK 兑换</h1>
+          <p class="text-muted text-sm">经本站转发卡台公开接口：preview → preflight → redeem → 查询结果</p>
+        </div>
+        <div class="flex items-center gap-3">
+          <LanguageToggle />
+          <ThemeToggle />
+        </div>
+      </div>
+
+      <!-- 服务费参考 -->
+      <div class="card mb-6 !py-4">
+        <div class="text-sm text-muted mb-2">套餐服务费参考（发码方已付；兑换不再收此费）· {{ plansSource }}</div>
+        <div class="flex flex-wrap gap-4 text-sm">
+          <span v-for="(p, k) in plans" :key="k" class="mono">
+            {{ p.label || k }}: <b>${{ Number(p.service_fee_usd ?? 0).toFixed(2) }}</b>
+          </span>
+        </div>
+      </div>
+
+      <!-- steps -->
+      <div class="card mb-6">
+        <div class="flex gap-2 text-sm flex-wrap">
+          <span v-for="(s, i) in steps" :key="s" class="pill" :class="step === i + 1 ? 'pill-info' : ''">{{ i + 1 }}. {{ s }}</span>
+        </div>
+      </div>
+
+      <!-- 1 preview -->
+      <div v-show="step === 1" class="card space-y-4">
+        <h2 class="text-xl font-bold text-ink">输入 CDK</h2>
+        <input v-model="code" class="input mono" placeholder="SXC-XXXX-XXXX-XXXX-XXXX" @keyup.enter="doPreview" />
+        <div v-if="error" class="alert alert-error">{{ error }}</div>
+        <div v-if="previewInfo" class="rounded-xl bg-soft p-4 text-sm space-y-1">
+          <div>套餐：<b>{{ previewInfo.plan || previewInfo.plan_type || '—' }}</b></div>
+          <div class="text-muted">{{ previewInfo.message || '码有效，可继续' }}</div>
+        </div>
+        <button class="btn-primary w-full" :disabled="busy" @click="doPreview">{{ busy ? '校验中…' : '预览 / 下一步' }}</button>
+      </div>
+
+      <!-- 2 preflight -->
+      <div v-show="step === 2" class="card space-y-4">
+        <h2 class="text-xl font-bold text-ink">ChatGPT 凭证</h2>
+        <div class="flex gap-2">
+          <button type="button" class="btn-secondary !py-1" :class="{ 'ring-2': credMode === 'session' }" @click="credMode = 'session'">Session</button>
+          <button type="button" class="btn-secondary !py-1" :class="{ 'ring-2': credMode === 'mailbox' }" @click="credMode = 'mailbox'">邮箱</button>
+        </div>
+        <template v-if="credMode === 'session'">
+          <p class="text-sm text-muted">打开
+            <a class="app-link" href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener">chatgpt.com/api/auth/session</a>
+            复制 JSON 或 accessToken。
+          </p>
+          <textarea v-model="sessionRaw" class="input h-36 font-mono text-xs" placeholder='{"accessToken":"eyJ..."} 或纯 session 串' />
+        </template>
+        <template v-else>
+          <input v-model="email" class="input" placeholder="email@outlook.com" />
+          <input v-model="password" class="input" type="password" placeholder="邮箱密码" />
+        </template>
+        <div v-if="error" class="alert alert-error">{{ error }}</div>
+        <div class="flex gap-3">
+          <button class="btn-secondary flex-1" @click="step = 1">上一步</button>
+          <button class="btn-primary flex-1" :disabled="busy" @click="doPreflight">{{ busy ? '预检中…' : '预检' }}</button>
+        </div>
+      </div>
+
+      <!-- 3 redeem -->
+      <div v-show="step === 3" class="card space-y-4">
+        <h2 class="text-xl font-bold text-ink">确认兑换</h2>
+        <p class="text-sm text-muted">将提交兑换请求；结果不确定或 review 时请勿重复提交，请轮询结果。</p>
+        <div v-if="error" class="alert alert-error">{{ error }}</div>
+        <div class="flex gap-3">
+          <button class="btn-secondary flex-1" @click="step = 2">上一步</button>
+          <button class="btn-primary flex-1" :disabled="busy" @click="doRedeem">{{ busy ? '提交中…' : '兑换' }}</button>
+        </div>
+      </div>
+
+      <!-- 4 result -->
+      <div v-show="step === 4" class="card space-y-4">
+        <h2 class="text-xl font-bold text-ink">兑换进度</h2>
+
+        <div class="flex flex-wrap items-center gap-2">
+          <el-tag :type="statusTagType(resultStatus)" size="large">{{ resultStatus || '—' }}</el-tag>
+          <span v-if="resultStage" class="text-sm text-muted mono">阶段 {{ resultStage }}</span>
+          <span v-if="polling" class="text-sm text-muted">
+            <span class="inline-block animate-pulse">●</span> 实时轮询中（约 3s）
+          </span>
+          <span v-else-if="isTerminal(resultStatus)" class="text-sm" :class="resultStatus === 'completed' ? 'text-good' : 'text-muted'">
+            已结束
+          </span>
+        </div>
+
+        <div v-if="resultMessage" class="rounded-xl bg-soft p-3 text-sm text-ink">
+          {{ resultMessage }}
+        </div>
+
+        <!-- 进度步骤条（由 stage / events 推导） -->
+        <div class="grid grid-cols-4 gap-2 text-center text-xs">
+          <div
+            v-for="p in progressSteps"
+            :key="p.key"
+            class="rounded-lg border px-2 py-2"
+            :class="p.active ? 'border-primary bg-primary/10 text-ink font-semibold' : 'border-brd text-muted'"
+          >
+            {{ p.label }}
+          </div>
+        </div>
+
+        <!-- 时间线明细（卡台 events） -->
+        <div v-if="timeline.length" class="space-y-0">
+          <div class="text-sm font-medium text-ink mb-2">处理明细</div>
+          <ol class="space-y-3 border-l-2 pl-4" style="border-color: var(--brd)">
+            <li v-for="(ev, idx) in timeline" :key="ev.id || idx" class="relative">
+              <span
+                class="absolute -left-[1.35rem] top-1 h-2.5 w-2.5 rounded-full"
+                :style="{ background: eventDot(ev.category) }"
+              />
+              <div class="flex flex-wrap items-baseline gap-2">
+                <b class="text-sm text-ink">{{ stepLabel(ev.step) }}</b>
+                <el-tag size="small" :type="categoryTag(ev.category)">{{ ev.category || 'pending' }}</el-tag>
+                <span class="text-xs text-subtle">{{ fmtTime(ev.created_at) }}</span>
+              </div>
+              <p class="text-sm text-muted mt-0.5">
+                {{ ev.public_message || ev.to_status || '—' }}
+              </p>
+            </li>
+          </ol>
+        </div>
+        <div v-else-if="polling" class="text-sm text-muted">
+          已提交，等待卡台返回步骤明细…
+        </div>
+
+        <details class="text-xs text-muted">
+          <summary class="cursor-pointer select-none">原始响应（调试）</summary>
+          <pre class="rounded-xl bg-soft p-4 overflow-auto max-h-48 mt-2">{{ resultPretty }}</pre>
+        </details>
+
+        <div v-if="error" class="alert alert-error">{{ error }}</div>
+        <div v-if="isTerminal(resultStatus) && resultStatus !== 'completed'" class="alert alert-error">
+          兑换未成功。若状态为 review/pending 请勿重复提交；可联系发码方或稍后用同一设备再查结果。
+        </div>
+        <div v-if="resultStatus === 'completed'" class="alert alert-success">开通完成，请到 ChatGPT 账号确认套餐。</div>
+        <button class="btn-secondary" @click="resetAll">再兑一张</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+import LanguageToggle from '../../components/LanguageToggle.vue'
+import ThemeToggle from '../../components/ThemeToggle.vue'
+
+const { t } = useI18n({ useScope: 'global' })
+const steps = ['预览', '凭证', '兑换', '结果']
+const step = ref(1)
+const busy = ref(false)
+const error = ref('')
+const code = ref('')
+const previewInfo = ref<any>(null)
+const redemptionToken = ref('')
+const preflightToken = ref('')
+const credMode = ref<'session' | 'mailbox'>('session')
+const sessionRaw = ref('')
+const email = ref('')
+const password = ref('')
+const resultStatus = ref('')
+const resultStage = ref('')
+const resultMessage = ref('')
+const resultBody = ref<any>(null)
+const timeline = ref<any[]>([])
+const polling = ref(false)
+let pollTimer: any = null
+
+const plans = ref<Record<string, any>>({})
+const plansSource = ref('—')
+
+const deviceId = (() => {
+  const k = 'cdk_device_id'
+  let v = localStorage.getItem(k)
+  if (!v) {
+    v = 'web-' + Math.random().toString(36).slice(2) + Date.now().toString(36)
+    localStorage.setItem(k, v)
+  }
+  return v
+})()
+
+const resultPretty = computed(() => JSON.stringify(resultBody.value, null, 2))
+
+const TERMINAL = new Set(['completed', 'declined', 'failed_precharge', 'cancelled', 'failed'])
+
+function isTerminal(st: string) {
+  return TERMINAL.has(String(st || '').toLowerCase())
+}
+
+function statusTagType(st: string) {
+  const s = String(st || '').toLowerCase()
+  if (s === 'completed') return 'success'
+  if (['declined', 'failed_precharge', 'cancelled', 'failed'].includes(s)) return 'danger'
+  if (['review', 'pending', 'card_open_review', 'card_recharge_review'].includes(s)) return 'warning'
+  return 'info'
+}
+
+function categoryTag(c: string) {
+  if (c === 'success' || c === 'completed') return 'success'
+  if (c === 'failed' || c === 'error') return 'danger'
+  if (c === 'warning') return 'warning'
+  return 'info'
+}
+
+function eventDot(c: string) {
+  if (c === 'success' || c === 'completed') return 'var(--good, #16a34a)'
+  if (c === 'failed' || c === 'error') return 'var(--err, #dc2626)'
+  if (c === 'warning') return 'var(--warn, #d97706)'
+  return 'var(--primary, #2563eb)'
+}
+
+function stepLabel(stepKey: string) {
+  const map: Record<string, string> = {
+    queued: '排队受理',
+    credential_check: '凭证校验',
+    pricing: '计价',
+    checkout: '开卡/绑卡',
+    payment: '支付扣款',
+    subscription: '订阅生效',
+    invoice: '账单',
+    renewal: '续费处理',
+    reconcile: '对账确认',
+    completed: '完成',
+  }
+  return map[stepKey] || stepKey || '处理中'
+}
+
+function fmtTime(v: any) {
+  if (!v) return ''
+  try {
+    const d = new Date(v)
+    if (Number.isNaN(d.getTime())) return String(v)
+    return d.toLocaleString()
+  } catch {
+    return String(v)
+  }
+}
+
+/** 粗粒度进度条：受理 → 开卡/资金 → 支付 → 开通 */
+const progressSteps = computed(() => {
+  const keys = [
+    { key: 'accept', label: '受理' },
+    { key: 'card', label: '开卡/资金' },
+    { key: 'pay', label: '支付' },
+    { key: 'done', label: '开通' },
+  ]
+  const st = String(resultStatus.value || '').toLowerCase()
+  const stage = String(resultStage.value || '').toLowerCase()
+  let idx = 0
+  if (st === 'completed') idx = 3
+  else if (['declined', 'failed_precharge', 'cancelled', 'failed'].includes(st)) {
+    // 停在失败前最远一步
+    if (stage.includes('pay') || stage.includes('checkout') || stage.includes('subscription')) idx = 2
+    else if (stage.includes('card') || stage.includes('fund')) idx = 1
+    else idx = 0
+  } else if (stage.includes('subscription') || stage.includes('paid') || stage.includes('invoice')) idx = 2
+  else if (stage.includes('dispatch') || stage.includes('payment') || stage.includes('checkout') || stage.includes('spend')) idx = 2
+  else if (stage.includes('card') || stage.includes('fund') || stage.includes('await')) idx = 1
+  else if (timeline.value.some((e) => ['payment', 'subscription', 'checkout'].includes(e.step))) idx = 2
+  else if (timeline.value.length) idx = 1
+  return keys.map((k, i) => ({ ...k, active: i <= idx }))
+})
+
+function applyResultPayload(data: any) {
+  resultBody.value = data
+  // 卡台公开结构：{ order: {status,stage,message}, events: [] }
+  // 兼容顶层扁平 / data 包裹
+  const order = data?.order || data?.data?.order || data?.data || data || {}
+  const st =
+    order.status ||
+    data?.status ||
+    data?.data?.status ||
+    ''
+  const stage = order.stage || data?.stage || data?.data?.stage || ''
+  const message =
+    order.message ||
+    order.user_message ||
+    data?.message ||
+    data?.user_message ||
+    data?.data?.message ||
+    ''
+  resultStatus.value = st
+  resultStage.value = stage
+  resultMessage.value = message
+
+  let events = data?.events || data?.data?.events || order.events || []
+  if (!Array.isArray(events)) events = []
+  timeline.value = events.slice().sort((a: any, b: any) => {
+    const ta = new Date(a.created_at || 0).getTime()
+    const tb = new Date(b.created_at || 0).getTime()
+    return ta - tb
+  })
+}
+
+async function api(path: string, init: RequestInit = {}) {
+  const headers = new Headers(init.headers || {})
+  headers.set('X-Redemption-Device', deviceId)
+  if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+  const r = await fetch(path, { ...init, headers, credentials: 'include' })
+  const text = await r.text()
+  let data: any = null
+  try { data = text ? JSON.parse(text) : null } catch { data = { raw: text } }
+  return { r, data }
+}
+
+onMounted(async () => {
+  try {
+    const { r, data } = await api('/api/v1/public/cdk/plans')
+    if (r.ok && data?.plans) {
+      plans.value = data.plans
+      plansSource.value = data.source || 'live'
+    }
+  } catch { /* ignore */ }
+})
+
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer)
+})
+
+function extractSession(raw: string): string {
+  const s = raw.trim()
+  if (!s) return ''
+  if (s.startsWith('{')) {
+    try {
+      const o = JSON.parse(s)
+      return o.accessToken || o.access_token || o.session || s
+    } catch {
+      return s
+    }
+  }
+  return s
+}
+
+async function doPreview() {
+  error.value = ''
+  previewInfo.value = null
+  if (!code.value.trim()) {
+    error.value = '请输入 CDK'
+    return
+  }
+  busy.value = true
+  try {
+    const { r, data } = await api('/api/v1/public/cdk/preview', {
+      method: 'POST',
+      body: JSON.stringify({ code: code.value.trim() }),
+    })
+    if (!r.ok) {
+      error.value = data?.error || data?.msg || data?.message || 'CDK 无效或不可用'
+      return
+    }
+    // 兼容多种返回结构
+    redemptionToken.value = data.redemption_token || data.data?.redemption_token || data.token || ''
+    previewInfo.value = data.data || data
+    if (!redemptionToken.value) {
+      // 有的实现把 token 放在顶层其它字段
+      error.value = '未返回 redemption_token，请检查卡台 Base 配置'
+      return
+    }
+    step.value = 2
+  } finally {
+    busy.value = false
+  }
+}
+
+async function doPreflight() {
+  error.value = ''
+  busy.value = true
+  try {
+    let credential: any
+    if (credMode.value === 'session') {
+      const session = extractSession(sessionRaw.value)
+      if (!session) {
+        error.value = '请填写 session'
+        return
+      }
+      credential = { mode: 'session', session }
+    } else {
+      if (!email.value || !password.value) {
+        error.value = '请填写邮箱与密码'
+        return
+      }
+      credential = { mode: 'mailbox', email: email.value.trim(), password: password.value }
+    }
+    const { r, data } = await api('/api/v1/public/cdk/preflight', {
+      method: 'POST',
+      body: JSON.stringify({
+        redemption_token: redemptionToken.value,
+        credential,
+      }),
+    })
+    if (!r.ok) {
+      error.value = data?.error || data?.msg || data?.message || '预检失败'
+      return
+    }
+    preflightToken.value = data.preflight_token || data.data?.preflight_token || ''
+    if (!preflightToken.value) {
+      error.value = '未返回 preflight_token'
+      return
+    }
+    step.value = 3
+  } finally {
+    busy.value = false
+  }
+}
+
+async function doRedeem() {
+  error.value = ''
+  busy.value = true
+  try {
+    const client_request_id = 'web-' + deviceId.slice(0, 8) + '-' + Date.now()
+    const { r, data } = await api('/api/v1/public/cdk/redeem', {
+      method: 'POST',
+      body: JSON.stringify({
+        redemption_token: redemptionToken.value,
+        preflight_token: preflightToken.value,
+        client_request_id,
+      }),
+    })
+    applyResultPayload(data)
+    if (!r.ok && r.status !== 202) {
+      error.value = data?.error || data?.msg || data?.message || '兑换被拒绝'
+    }
+    if (!resultStatus.value) {
+      resultStatus.value = r.ok || r.status === 202 ? 'queued' : 'error'
+    }
+    step.value = 4
+    startPoll()
+  } finally {
+    busy.value = false
+  }
+}
+
+function startPoll() {
+  if (pollTimer) clearInterval(pollTimer)
+  polling.value = true
+  const tick = async () => {
+    try {
+      const { r, data } = await api(
+        '/api/v1/public/cdk/result?token=' + encodeURIComponent(redemptionToken.value),
+      )
+      if (r.ok) {
+        applyResultPayload(data)
+        if (isTerminal(resultStatus.value)) {
+          polling.value = false
+          if (pollTimer) clearInterval(pollTimer)
+        }
+      }
+    } catch {
+      /* ignore transient network */
+    }
+  }
+  tick()
+  pollTimer = setInterval(tick, 3000)
+}
+
+function resetAll() {
+  if (pollTimer) clearInterval(pollTimer)
+  step.value = 1
+  error.value = ''
+  code.value = ''
+  previewInfo.value = null
+  redemptionToken.value = ''
+  preflightToken.value = ''
+  resultBody.value = null
+  resultStatus.value = ''
+  resultStage.value = ''
+  resultMessage.value = ''
+  timeline.value = []
+  polling.value = false
+}
+</script>
+
+<style scoped>
+.text-good { color: var(--good, #16a34a); }
+.border-primary { border-color: var(--primary) !important; }
+.bg-primary\/10 { background: color-mix(in srgb, var(--primary) 12%, transparent); }
+.border-brd { border-color: var(--brd); }
+</style>

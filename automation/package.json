@@ -1,0 +1,13 @@
+{
+  "name": "checkout-autofill",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "ChatGPT 充值支付页自动填表（Playwright/Chrome）：登录→跳菲律宾20x→自动填卡号+免税地址，遇验证停下人工处理",
+  "scripts": {
+    "fill": "node fill-checkout.js"
+  },
+  "dependencies": {
+    "playwright": "^1.48.0"
+  }
+}

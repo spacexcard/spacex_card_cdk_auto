@@ -1,0 +1,19 @@
+[Unit]
+Description=CDK Recharge System (gptcdk.ai)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/cdk-recharge
+EnvironmentFile=-/opt/cdk-recharge/app.env
+ExecStart=/opt/cdk-recharge/cdk-recharge
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65535
+
+# 不把密钥打进 journal 以外的地方；应用自身避免打印 secret
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

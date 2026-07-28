@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "id": "ember",
+  "name": "Ember",
+  "version": "1.0.0",
+  "surfaces": ["public", "admin"],
+  "styles": {
+    "public": "public.css",
+    "admin": "admin.css"
+  },
+  "assets": {}
+}

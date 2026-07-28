@@ -1,0 +1,19 @@
+[data-surface="admin"] {
+  --bg: #130b08;
+  --panel: #21130e;
+  --panel-2: #2b1912;
+  --line: #4a2c20;
+  --text: #fff4ec;
+  --muted: #bc9782;
+  --accent: #ff985f;
+  --accent-2: #ffd166;
+  --danger: #ff6f78;
+  --warn: #ffd166;
+}
+
+[data-surface="admin"] .sidebar,
+[data-surface="admin"] .panel,
+[data-surface="admin"] .metric,
+[data-surface="admin"] .auth-card {
+  background-color: #1d100c;
+}
