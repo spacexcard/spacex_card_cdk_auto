@@ -1,0 +1,73 @@
+# Tag 推送 v* 时自动构建 linux/amd64 发布包并挂到 GitHub Release，
+# 供管理后台「一键更新」下载（无需生产机装 Go/Node）。
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Version from tag
+        id: ver
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "$VER" > VERSION
+
+      - name: Build backend
+        working-directory: backend
+        run: |
+          mkdir -p ../dist
+          go build -trimpath -ldflags="-s -w -X github.com/tuzi/cdk-recharge-system/internal/handler.BuildVersion=${{ steps.ver.outputs.version }}" \
+            -o ../dist/cdk-recharge ./cmd/server
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+          mkdir -p ../dist/web
+          cp -a dist/. ../dist/web/
+
+      - name: Pack bundle
+        run: |
+          cp VERSION dist/VERSION
+          # 结构与 deploy 脚本一致：二进制 + web/ + VERSION
+          tar -C dist -czf "cdk-bundle-linux-amd64.tgz" cdk-recharge web VERSION
+          sha256sum "cdk-bundle-linux-amd64.tgz" | tee "cdk-bundle-linux-amd64.tgz.sha256"
+          ls -lh cdk-bundle-linux-amd64.tgz*
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            cdk-bundle-linux-amd64.tgz
+            cdk-bundle-linux-amd64.tgz.sha256
+            VERSION
