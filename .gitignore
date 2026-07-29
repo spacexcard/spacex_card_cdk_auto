@@ -72,3 +72,8 @@ backend/cdk-recharge
 # Git push credentials (never commit)
 .push.env
 .push.env.local
+
+# release artifacts
+cdk-bundle*.tgz
+cdk-bundle*.sha256
+dist/
