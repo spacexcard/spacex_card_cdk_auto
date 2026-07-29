@@ -24,7 +24,7 @@
         </article>
       </div>
 
-      <div class="grid gap-5 md:grid-cols-2">
+      <div class="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
         <section class="card space-y-3">
           <h2 class="text-xl font-semibold text-ink">快捷入口</h2>
           <div class="flex flex-wrap gap-2">
@@ -44,6 +44,54 @@
             <li>对账：开通邮箱 / 用卡 / 金额 / CDK 消耗或释放</li>
             <li>结果通知：轮询 result + 可选 Webhook</li>
           </ul>
+        </section>
+        <section class="card space-y-3">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <h2 class="text-xl font-semibold text-ink">版本更新</h2>
+              <p class="text-xs text-muted mt-1">对照 GitHub 最新 release / tag</p>
+            </div>
+            <el-button size="small" :loading="versionLoading" @click="loadVersion(true)">检查更新</el-button>
+          </div>
+          <div v-if="versionError" class="text-sm" style="color: var(--err)">{{ versionError }}</div>
+          <div class="space-y-2 text-sm">
+            <div class="flex justify-between gap-2">
+              <span class="text-muted">当前版本</span>
+              <span class="mono font-semibold text-ink">v{{ versionInfo.current || '—' }}</span>
+            </div>
+            <div class="flex justify-between gap-2">
+              <span class="text-muted">GitHub 最新</span>
+              <span class="mono font-semibold" :style="versionInfo.update_available ? 'color: var(--warn)' : 'color: var(--good)'">
+                {{ versionInfo.latest ? `v${versionInfo.latest}` : '—' }}
+              </span>
+            </div>
+            <div class="flex justify-between gap-2">
+              <span class="text-muted">状态</span>
+              <el-tag size="small" :type="versionInfo.update_available ? 'warning' : 'success'">
+                {{ versionInfo.update_available ? '有新版本' : (versionInfo.latest ? '已是最新' : '未取到远端') }}
+              </el-tag>
+            </div>
+            <div v-if="versionInfo.github_repo" class="text-xs text-subtle break-all">
+              仓库 {{ versionInfo.github_repo }}
+              <span v-if="versionInfo.checked_at"> · 检查于 {{ formatChecked(versionInfo.checked_at) }}</span>
+            </div>
+          </div>
+          <div class="flex flex-wrap gap-2 pt-1">
+            <a
+              v-if="versionInfo.release_url"
+              class="btn-primary !px-4 !py-2 text-sm"
+              :href="versionInfo.release_url"
+              target="_blank"
+              rel="noopener noreferrer"
+            >打开最新版本</a>
+            <a
+              v-if="versionInfo.tags_url"
+              class="btn-secondary !px-4 !py-2 text-sm"
+              :href="versionInfo.tags_url"
+              target="_blank"
+              rel="noopener noreferrer"
+            >查看 Tags</a>
+          </div>
         </section>
       </div>
     </div>
@@ -90,10 +138,22 @@ const pwdLoading = ref(false)
 const pwdError = ref('')
 const pwdForm = reactive({ old_password: '', new_password: '', confirm: '' })
 
+const versionLoading = ref(false)
+const versionError = ref('')
+const versionInfo = ref<any>({})
+
 function numOrDash(v: unknown) {
   if (v === null || v === undefined || v === '') return '—'
   const n = Number(v)
   return Number.isFinite(n) ? n : '—'
+}
+
+function formatChecked(iso: string) {
+  try {
+    return new Date(iso).toLocaleString()
+  } catch {
+    return iso
+  }
 }
 
 const statCards = computed(() => {
@@ -105,6 +165,28 @@ const statCards = computed(() => {
     { label: '兑换订单', value: statsLoading.value ? '…' : numOrDash(s.total_cdk_orders ?? s.total_tasks), hint: '卡台 CDK 订单' },
   ]
 })
+
+async function loadVersion(force = false) {
+  versionLoading.value = true
+  versionError.value = ''
+  try {
+    const q = force ? '?refresh=1' : ''
+    const r = await authFetch(`/api/v1/admin/system/version${q}`)
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      versionError.value = d.error || '版本检查失败'
+      return
+    }
+    versionInfo.value = d
+    if (d.github_error && !d.latest) {
+      versionError.value = `GitHub: ${d.github_error}`
+    }
+  } catch (e: any) {
+    versionError.value = e?.message || '网络错误'
+  } finally {
+    versionLoading.value = false
+  }
+}
 
 onMounted(async () => {
   statsLoading.value = true
@@ -127,6 +209,7 @@ onMounted(async () => {
   } finally {
     statsLoading.value = false
   }
+  loadVersion(false)
 })
 
 function openPwdModal() {

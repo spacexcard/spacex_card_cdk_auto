@@ -4,7 +4,7 @@
       <div>
         <h1 class="text-3xl font-bold text-ink">CDK 卡密</h1>
         <p class="text-sm text-muted mt-2">
-          卡台 Open API 发码 · 服务费实时计价 · 完整码仅显示一次
+          卡台 Open API 发码 · 服务费实时计价 · 完整码仅在成功响应中返回（请立即复制/导出）
         </p>
       </div>
       <div class="flex flex-wrap gap-2">
@@ -98,22 +98,46 @@
         <p v-if="!configured" class="text-xs" style="color: var(--err)">请先在「卡台配置」填写 Base 与 sk_</p>
         <p v-else-if="!form.funding_confirmed" class="text-xs text-muted">请勾选资金确认后发码</p>
 
-        <div v-if="recentCodes.length" class="rounded-xl bg-soft p-4 space-y-2 border" style="border-color: var(--good)">
-          <div class="flex items-center justify-between">
-            <span class="text-sm font-medium" style="color: var(--good)">完整码（仅此一次）</span>
-            <div class="flex gap-1">
+        <div v-if="recentCodes.length" class="rounded-xl bg-soft p-4 space-y-3 border" style="border-color: var(--good)">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div class="text-sm font-medium" style="color: var(--good)">完整码（本批 {{ recentCodes.length }} 张）</div>
+              <div class="text-xs text-muted mt-0.5">
+                卡台明文只返回一次；本页已缓存在浏览器 sessionStorage，刷新后仍可复制。
+                <span v-if="recentMeta">套餐 {{ recentMeta.plan }} · {{ recentMeta.atLabel }}</span>
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-1">
               <el-button size="small" type="success" @click="copyAll">全部复制</el-button>
               <el-button size="small" @click="downloadCodes">导出 .txt</el-button>
+              <el-button size="small" text type="danger" @click="clearRecent">清除缓存</el-button>
             </div>
           </div>
-          <div
-            v-for="c in recentCodes"
-            :key="c"
-            class="font-mono text-sm break-all cursor-pointer hover:opacity-80"
-            style="color: var(--good)"
-            title="点击复制"
-            @click="copyText(c)"
-          >{{ c }}</div>
+
+          <textarea
+            class="input mono text-sm !min-h-[120px] w-full"
+            readonly
+            :value="recentCodes.join('\n')"
+            @focus="($event.target as HTMLTextAreaElement).select()"
+          />
+
+          <div class="space-y-2">
+            <div
+              v-for="(c, idx) in recentCodes"
+              :key="`${idx}-${c}`"
+              class="flex items-start gap-2 rounded-lg px-2 py-1.5"
+              style="background: var(--surface)"
+            >
+              <div class="flex-1 min-w-0">
+                <div class="font-mono text-sm break-all select-all" style="color: var(--good); user-select: all">{{ c }}</div>
+                <div class="text-xs text-muted mt-0.5">
+                  长度 {{ c.length }}
+                  <span v-if="!isFullCode(c)" class="ml-1" style="color: var(--err)">（疑似非完整码，请勿当正式卡密）</span>
+                </div>
+              </div>
+              <el-button size="small" type="primary" plain @click="copyText(c)">复制</el-button>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -122,7 +146,7 @@
         <div class="card flex flex-wrap items-center justify-between gap-3 !py-3">
           <div>
             <h2 class="text-lg font-semibold text-ink">卡台 CDK 列表</h2>
-            <p class="text-xs text-muted">仅前缀与状态 · 共 {{ total }} 条</p>
+            <p class="text-xs text-muted">仅前缀与状态（完整码不会二次返回）· 共 {{ total }} 条</p>
           </div>
           <el-button :loading="loadingList" @click="loadList">刷新</el-button>
         </div>
@@ -130,9 +154,10 @@
         <div class="card overflow-hidden !p-0">
           <el-table :data="rows" v-loading="loadingList" size="small" stripe empty-text="暂无数据">
             <el-table-column prop="id" label="ID" width="80" />
-            <el-table-column prop="code_prefix" label="前缀" min-width="120">
+            <el-table-column prop="code_prefix" label="前缀（非完整码）" min-width="140">
               <template #default="{ row }">
-                <span class="mono">{{ row.code_prefix || '—' }}</span>
+                <span class="mono break-all">{{ row.code_prefix || '—' }}</span>
+                <span v-if="row.code_prefix" class="text-xs text-subtle ml-1">{{ String(row.code_prefix).length }}字</span>
               </template>
             </el-table-column>
             <el-table-column prop="plan" label="套餐" width="100" />
@@ -165,6 +190,11 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { authFetch } from '../../lib/api'
 import { dialog } from '../../lib/dialog'
+import { copyToClipboard } from '../../lib/clipboard'
+
+const RECENT_KEY = 'cdk_recent_issued_v1'
+/** 卡台完整码形如 GPTD-xxxxxxxxxxxx-xxxxxxxxxxxx-xxxxxxxxxxxx（约 43 字符） */
+const FULL_CODE_MIN_LEN = 20
 
 const plans = ref<Record<string, any>>({})
 const pricingVersion = ref<number | null>(null)
@@ -184,6 +214,7 @@ const issuing = ref(false)
 const issueError = ref('')
 const issueOk = ref('')
 const recentCodes = ref<string[]>([])
+const recentMeta = ref<{ plan: string; atLabel: string } | null>(null)
 
 const rows = ref<any[]>([])
 const total = ref(0)
@@ -240,13 +271,67 @@ function statusType(s: string) {
   return ''
 }
 
-async function copyText(t: string) {
-  try {
-    await navigator.clipboard.writeText(t)
-    dialog.toast('已复制', 'ok')
-  } catch {
-    dialog.toast('复制失败', 'err')
+function isFullCode(code: string) {
+  const c = String(code || '').trim()
+  // 完整码至少 20 字符；前缀一般 ≤14
+  return c.length >= FULL_CODE_MIN_LEN && c.includes('-')
+}
+
+function extractFullCode(item: any): string {
+  if (!item || typeof item !== 'object') return ''
+  const candidates = [item.code, item.full_code, item.cdk_code, item.value]
+  for (const raw of candidates) {
+    const s = String(raw || '').trim()
+    if (isFullCode(s)) return s
   }
+  // 绝不把 code_prefix 当完整码
+  return ''
+}
+
+function persistRecent(codes: string[], plan: string) {
+  const payload = { codes, plan, at: Date.now() }
+  try {
+    sessionStorage.setItem(RECENT_KEY, JSON.stringify(payload))
+  } catch {
+    /* ignore quota */
+  }
+  recentMeta.value = {
+    plan,
+    atLabel: new Date(payload.at).toLocaleString(),
+  }
+}
+
+function loadPersistedRecent() {
+  try {
+    const raw = sessionStorage.getItem(RECENT_KEY)
+    if (!raw) return
+    const o = JSON.parse(raw)
+    const codes = Array.isArray(o?.codes) ? o.codes.map((x: any) => String(x || '').trim()).filter(Boolean) : []
+    if (!codes.length) return
+    recentCodes.value = codes
+    recentMeta.value = {
+      plan: String(o.plan || '—'),
+      atLabel: o.at ? new Date(o.at).toLocaleString() : '—',
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function clearRecent() {
+  recentCodes.value = []
+  recentMeta.value = null
+  try {
+    sessionStorage.removeItem(RECENT_KEY)
+  } catch {
+    /* ignore */
+  }
+  dialog.toast('已清除本批完整码缓存', 'info')
+}
+
+async function copyText(t: string) {
+  const ok = await copyToClipboard(t)
+  dialog.toast(ok ? '已复制' : '复制失败，请在文本框中全选手动复制', ok ? 'ok' : 'err')
 }
 
 async function loadMeta() {
@@ -316,10 +401,22 @@ async function issue() {
       }
       return
     }
-    const issued = d.issued || []
-    recentCodes.value = issued.map((x: any) => x.code).filter(Boolean)
-    issueOk.value = `成功 ${issued.length} 张`
-    dialog.toast(issueOk.value, 'ok')
+    const issued = Array.isArray(d.issued) ? d.issued : (Array.isArray(d.data?.issued) ? d.data.issued : [])
+    const codes = issued.map(extractFullCode).filter(Boolean)
+    if (!codes.length) {
+      issueError.value = '卡台返回成功但未包含完整码字段 code（请勿把列表里的前缀当卡密使用）。原始响应请查网络面板。'
+      recentCodes.value = []
+      return
+    }
+    recentCodes.value = codes
+    persistRecent(codes, form.plan)
+    const shortOnes = codes.filter((c) => !isFullCode(c))
+    issueOk.value = shortOnes.length
+      ? `成功 ${codes.length} 张，但有 ${shortOnes.length} 张长度异常，请核对`
+      : `成功 ${codes.length} 张完整码（每条约 ${codes[0]?.length || '—'} 字符）`
+    dialog.toast(issueOk.value, shortOnes.length ? 'warn' : 'ok')
+    // 发码成功后自动尝试复制全部，减少漏拷
+    await copyAll(false)
     form.funding_confirmed = false
     await loadList()
     await loadMeta()
@@ -347,16 +444,21 @@ async function loadList() {
   }
 }
 
-async function copyAll() {
-  await copyText(recentCodes.value.join('\n'))
+async function copyAll(showToast = true) {
+  if (!recentCodes.value.length) return
+  const ok = await copyToClipboard(recentCodes.value.join('\n'))
+  if (showToast) dialog.toast(ok ? `已复制 ${recentCodes.value.length} 张完整码` : '复制失败，请用下方文本框全选', ok ? 'ok' : 'err')
 }
+
 function downloadCodes() {
-  const blob = new Blob([recentCodes.value.join('\n') + '\n'], { type: 'text/plain' })
+  if (!recentCodes.value.length) return
+  const blob = new Blob([recentCodes.value.join('\n') + '\n'], { type: 'text/plain;charset=utf-8' })
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)
-  a.download = `cdk-${form.plan}-${Date.now()}.txt`
+  a.download = `cdk-${form.plan || recentMeta.value?.plan || 'batch'}-${Date.now()}.txt`
   a.click()
   URL.revokeObjectURL(a.href)
+  dialog.toast('已导出 .txt', 'ok')
 }
 
 async function refreshAll() {
@@ -365,6 +467,7 @@ async function refreshAll() {
 }
 
 onMounted(async () => {
+  loadPersistedRecent()
   await refreshAll()
 })
 </script>
@@ -374,4 +477,5 @@ onMounted(async () => {
 .plan-card:hover { border-color: var(--brd-2); }
 .plan-card--on { border-color: var(--primary) !important; box-shadow: 0 0 0 1px var(--primary-soft); }
 .mono { font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.select-all { user-select: all; -webkit-user-select: all; }
 </style>

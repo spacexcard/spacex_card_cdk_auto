@@ -119,7 +119,31 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 	u, _ := c.Get("username")
 	username, _ := u.(string)
 	db.WriteAudit(username, "cardplatform_issue_cdk", "plan="+plan+" count="+strconv.Itoa(req.Count), c.ClientIP())
-	c.JSON(http.StatusOK, res)
+	// 规范化：保证前端总能拿到完整 code 字段；绝不把 code_prefix 填进 code
+	issued := make([]gin.H, 0, len(res.Issued))
+	for _, it := range res.Issued {
+		code := strings.TrimSpace(it.Code)
+		prefix := strings.TrimSpace(it.CodePrefix)
+		if code == "" {
+			// 防御上游异常：只回了前缀时仍原样暴露前缀字段，但不伪造 code
+			issued = append(issued, gin.H{
+				"id": it.ID, "code": "", "plan": it.Plan,
+				"code_prefix": prefix, "fee_amount_minor": it.FeeAmountMinor,
+				"incomplete": true,
+			})
+			continue
+		}
+		issued = append(issued, gin.H{
+			"id": it.ID, "code": code, "plan": it.Plan,
+			"code_prefix": prefix, "fee_amount_minor": it.FeeAmountMinor,
+			"code_length": len(code),
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"requested": res.Requested,
+		"issued":    issued,
+		"count":     len(issued),
+	})
 }
 
 // CardPlatformListCDKs GET /api/v1/admin/cardplatform/cdks?page=&page_size=
