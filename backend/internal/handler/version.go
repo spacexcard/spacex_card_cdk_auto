@@ -69,14 +69,19 @@ func AdminSystemVersion(c *gin.Context) {
 	if !force && versionCacheBody != nil && time.Since(versionCacheAt) < versionCacheTTL {
 		body := cloneH(versionCacheBody)
 		versionCacheMu.Unlock()
+		latest := strField(body, "latest")
+		hasBundle, _ := body["has_bundle"].(bool)
+		upd := isRemoteNewer(local, latest)
 		body["current"] = local
-		body["update_available"] = isRemoteNewer(local, strField(body, "latest"))
+		body["update_available"] = upd
+		body["update_enabled"] = updateEnabled()
+		body["one_click_ready"] = upd && hasBundle && updateEnabled()
 		c.JSON(http.StatusOK, body)
 		return
 	}
 	versionCacheMu.Unlock()
 
-	latest, releaseURL, tagURL, source, errMsg := fetchGitHubLatest(repo)
+	latest, releaseURL, tagURL, source, hasBundle, errMsg := fetchGitHubLatest(repo)
 	update := isRemoteNewer(local, latest)
 	body := gin.H{
 		"current":          local,
@@ -86,6 +91,9 @@ func AdminSystemVersion(c *gin.Context) {
 		"release_url":      releaseURL,
 		"tags_url":         tagURL,
 		"source":           source,
+		"has_bundle":       hasBundle,
+		"update_enabled":   updateEnabled(),
+		"one_click_ready":  update && hasBundle && updateEnabled(),
 		"checked_at":       time.Now().UTC().Format(time.RFC3339),
 	}
 	if errMsg != "" {
@@ -97,6 +105,11 @@ func AdminSystemVersion(c *gin.Context) {
 	versionCacheAt = time.Now()
 	versionCacheMu.Unlock()
 
+	// 缓存命中路径也需要带上动态字段
+	body["current"] = local
+	body["update_available"] = update
+	body["update_enabled"] = updateEnabled()
+	body["one_click_ready"] = update && hasBundle && updateEnabled()
 	c.JSON(http.StatusOK, body)
 }
 
@@ -118,7 +131,7 @@ func strField(h gin.H, k string) string {
 	return ""
 }
 
-func fetchGitHubLatest(repo string) (latest, releaseURL, tagsURL, source, errMsg string) {
+func fetchGitHubLatest(repo string) (latest, releaseURL, tagsURL, source string, hasBundle bool, errMsg string) {
 	tagsURL = "https://github.com/" + repo + "/tags"
 	releaseURL = "https://github.com/" + repo + "/releases"
 	client := &http.Client{Timeout: 8 * time.Second}
@@ -137,6 +150,9 @@ func fetchGitHubLatest(repo string) (latest, releaseURL, tagsURL, source, errMsg
 			var payload struct {
 				TagName string `json:"tag_name"`
 				HTMLURL string `json:"html_url"`
+				Assets  []struct {
+					Name string `json:"name"`
+				} `json:"assets"`
 			}
 			if json.Unmarshal(raw, &payload) == nil && strings.TrimSpace(payload.TagName) != "" {
 				latest = strings.TrimPrefix(strings.TrimSpace(payload.TagName), "v")
@@ -144,6 +160,13 @@ func fetchGitHubLatest(repo string) (latest, releaseURL, tagsURL, source, errMsg
 					releaseURL = payload.HTMLURL
 				}
 				source = "release"
+				for _, a := range payload.Assets {
+					n := strings.ToLower(a.Name)
+					if strings.Contains(n, "cdk-bundle") && (strings.HasSuffix(n, ".tgz") || strings.HasSuffix(n, ".tar.gz")) {
+						hasBundle = true
+						break
+					}
+				}
 				return
 			}
 		}
@@ -154,7 +177,7 @@ func fetchGitHubLatest(repo string) (latest, releaseURL, tagsURL, source, errMsg
 		errMsg = err.Error()
 	}
 
-	// 2) fallback: tags
+	// 2) fallback: tags（无 assets，hasBundle=false，不可一键更新）
 	req2, _ := http.NewRequest(http.MethodGet, "https://api.github.com/repos/"+repo+"/tags?per_page=1", nil)
 	req2.Header.Set("Accept", "application/vnd.github+json")
 	req2.Header.Set("User-Agent", "cdk-recharge-system-version-check")

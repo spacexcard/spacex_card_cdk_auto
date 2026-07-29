@@ -163,6 +163,8 @@ func setupRoutes(r *gin.Engine) {
 		{
 			// 版本：本机 VERSION + GitHub 最新 release/tag
 			admin.GET("/system/version", handler.AdminSystemVersion)
+			admin.GET("/system/update/status", handler.AdminSystemUpdateStatus)
+			admin.POST("/system/update", handler.AdminSystemUpdate)
 
 			// 卡台 Open API：实时价格 / 余额 / 发码 / 列码 / CDK 订单
 			admin.GET("/cardplatform/ping", handler.CardPlatformPing)
