@@ -72,6 +72,18 @@ func createTables() error {
 		`CREATE INDEX IF NOT EXISTS idx_cd_keys_code ON cd_keys(code)`,
 		`CREATE INDEX IF NOT EXISTS idx_cd_keys_status ON cd_keys(status)`,
 
+		// 卡台 GPT 直充 CDK：发码时落库完整码，列表仅回前缀时用本表补全（admin 本站复制）
+		`CREATE TABLE IF NOT EXISTS cardplatform_cdk_codes (
+			upstream_id INTEGER,
+			code TEXT NOT NULL UNIQUE,
+			code_prefix TEXT,
+			plan TEXT,
+			fee_amount_minor INTEGER DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_cp_cdk_upstream ON cardplatform_cdk_codes(upstream_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_cp_cdk_prefix ON cardplatform_cdk_codes(code_prefix)`,
+
 		`CREATE TABLE IF NOT EXISTS recharge_tasks (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			task_id TEXT UNIQUE NOT NULL,
@@ -699,6 +711,54 @@ func legacyUUIDCode(planType string, id int64) string {
 	sum := sha1.Sum([]byte(seed))
 	hexID := hex.EncodeToString(sum[:16])
 	return fmt.Sprintf("%s-%s-%s-%s-%s", hexID[0:8], hexID[8:12], hexID[12:16], hexID[16:20], hexID[20:32])
+}
+
+// SaveCardplatformCDKCode 发码成功后缓存完整码（列表接口卡台只回 prefix）。
+func SaveCardplatformCDKCode(upstreamID int64, code, prefix, plan string, feeMinor int64) error {
+	if DB == nil {
+		return fmt.Errorf("db not init")
+	}
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return nil
+	}
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" && len(code) >= 14 {
+		prefix = code[:14]
+	}
+	_, err := DB.Exec(`
+		INSERT INTO cardplatform_cdk_codes (upstream_id, code, code_prefix, plan, fee_amount_minor, created_at)
+		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(code) DO UPDATE SET
+			upstream_id = excluded.upstream_id,
+			code_prefix = excluded.code_prefix,
+			plan = excluded.plan,
+			fee_amount_minor = excluded.fee_amount_minor
+	`, upstreamID, code, prefix, strings.TrimSpace(plan), feeMinor)
+	return err
+}
+
+// LookupCardplatformCDKCode 按上游 id 或 prefix 取完整码。
+func LookupCardplatformCDKCode(upstreamID int64, prefix string) (string, bool) {
+	if DB == nil {
+		return "", false
+	}
+	prefix = strings.TrimSpace(prefix)
+	var code string
+	if upstreamID > 0 {
+		err := DB.QueryRow(`SELECT code FROM cardplatform_cdk_codes WHERE upstream_id = ? ORDER BY created_at DESC LIMIT 1`, upstreamID).Scan(&code)
+		if err == nil && strings.TrimSpace(code) != "" {
+			return strings.TrimSpace(code), true
+		}
+	}
+	if prefix != "" {
+		err := DB.QueryRow(`SELECT code FROM cardplatform_cdk_codes WHERE code_prefix = ? OR code LIKE ? ORDER BY created_at DESC LIMIT 1`,
+			prefix, prefix+"%").Scan(&code)
+		if err == nil && strings.TrimSpace(code) != "" {
+			return strings.TrimSpace(code), true
+		}
+	}
+	return "", false
 }
 
 func Close() error {

@@ -325,7 +325,7 @@ function isFullCode(code: string) {
 
 function extractFullCode(item: any): string {
   if (!item || typeof item !== 'object') return ''
-  const candidates = [item.code, item.full_code, item.cdk_code, item.value]
+  const candidates = [item.full_code, item.fullCode, item.code, item.cdk_code, item.value]
   for (const raw of candidates) {
     const s = String(raw || '').trim()
     if (isFullCode(s)) return s
@@ -433,17 +433,23 @@ async function copyText(t: string) {
 }
 
 async function copyRowCode(row: any) {
-  const code = row?.fullCode || row?.displayCode || ''
+  // 优先完整码：本机缓存 / 列表接口补全的 code / full_code
+  const code = String(row?.fullCode || extractFullCode(row) || row?.displayCode || '').trim()
   if (!code) {
     dialog.toast('无可复制内容', 'warn')
     return
   }
-  const ok = await copyToClipboard(code)
-  if (!row.fullCode) {
-    dialog.toast(ok ? '已复制前缀（非完整码）' : '复制失败', ok ? 'warn' : 'err')
-  } else {
-    dialog.toast(ok ? '已复制完整卡密' : '复制失败', ok ? 'ok' : 'err')
+  const isFull = isFullCode(code)
+  if (!isFull) {
+    dialog.toast('仅有前缀，完整码未在本站缓存。请在本页重新发码后复制，或从当次「发码结果」区复制。', 'warn')
+    // 仍复制前缀，避免按钮失灵
   }
+  const ok = await copyToClipboard(code)
+  if (!ok) {
+    dialog.toast('复制失败，请长按文本手动复制', 'err')
+    return
+  }
+  dialog.toast(isFull ? '已复制完整卡密' : '已复制前缀（非完整码）', isFull ? 'ok' : 'warn')
 }
 
 async function loadMeta() {
@@ -551,7 +557,10 @@ async function loadList() {
       total.value = 0
       return
     }
-    rows.value = d.list || []
+    const list = Array.isArray(d.list) ? d.list : []
+    // 列表若带完整 code/full_code（本站发码缓存补全），写入缓存供点选复制
+    rememberIssued(list, form.plan)
+    rows.value = list
     total.value = d.total || 0
   } finally {
     loadingList.value = false

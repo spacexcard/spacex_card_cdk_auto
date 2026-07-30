@@ -133,10 +133,18 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 			})
 			continue
 		}
+		if prefix == "" && len(code) >= 14 {
+			prefix = code[:14]
+		}
+		// 本站持久化完整码：列表页卡台只回 prefix 时仍可复制完整码
+		if err := db.SaveCardplatformCDKCode(it.ID, code, prefix, it.Plan, it.FeeAmountMinor); err != nil {
+			// 不阻断发码响应
+		}
 		issued = append(issued, gin.H{
 			"id": it.ID, "code": code, "plan": it.Plan,
 			"code_prefix": prefix, "fee_amount_minor": it.FeeAmountMinor,
 			"code_length": len(code),
+			"full_code":  code,
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -156,7 +164,33 @@ func CardPlatformListCDKs(c *gin.Context) {
 		writeCardErr(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, res)
+	// 用本站发码缓存补全 code，便于列表点击复制完整码
+	type rowOut struct {
+		ID             int64  `json:"id"`
+		Plan           string `json:"plan"`
+		CodePrefix     string `json:"code_prefix"`
+		Status         string `json:"status"`
+		FeeAmountMinor int64  `json:"fee_amount_minor"`
+		CreatedAt      string `json:"created_at"`
+		Code           string `json:"code,omitempty"`
+		FullCode       string `json:"full_code,omitempty"`
+		HasFullCode    bool   `json:"has_full_code"`
+	}
+	out := make([]rowOut, 0, len(res.List))
+	for _, it := range res.List {
+		full, ok := db.LookupCardplatformCDKCode(it.ID, it.CodePrefix)
+		row := rowOut{
+			ID: it.ID, Plan: it.Plan, CodePrefix: it.CodePrefix, Status: it.Status,
+			FeeAmountMinor: it.FeeAmountMinor, CreatedAt: it.CreatedAt,
+			HasFullCode: ok,
+		}
+		if ok {
+			row.Code = full
+			row.FullCode = full
+		}
+		out = append(out, row)
+	}
+	c.JSON(http.StatusOK, gin.H{"list": out, "total": res.Total})
 }
 
 // CardPlatformListCDKOrders GET /api/v1/admin/cardplatform/cdk-orders
