@@ -22,14 +22,32 @@ func writeCardErr(c *gin.Context, err error) {
 		if status > 599 {
 			status = http.StatusBadGateway
 		}
+		// 上游卡台 401/403 表示 API Key 无效/权限不足，不是 CDK 管理员会话失效。
+		// 映射为 502，避免前端 authFetch 把 401 误判为登录过期并踢回登录页。
+		upstreamAuth := status == http.StatusUnauthorized || status == http.StatusForbidden
+		if upstreamAuth {
+			status = http.StatusBadGateway
+		}
+		msg := ae.Msg
+		if msg == "" {
+			msg = "cardplatform api error"
+		}
+		if upstreamAuth && !strings.Contains(strings.ToLower(msg), "api key") {
+			msg = msg + "（卡台 API Key 无效/未配置/无权限，与 CDK 登录无关）"
+		}
+		code := ae.ErrorCode
+		if code == "" && upstreamAuth {
+			code = "cardplatform_unauthorized"
+		}
 		c.JSON(status, gin.H{
-			"error":      ae.Msg,
-			"error_code": ae.ErrorCode,
+			"error":      msg,
+			"error_code": code,
 			"code":       ae.Code,
+			"upstream":   true,
 		})
 		return
 	}
-	c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+	c.JSON(http.StatusBadGateway, gin.H{"error": err.Error(), "upstream": true})
 }
 
 // CardPlatformPlans GET /api/v1/admin/cardplatform/plans
