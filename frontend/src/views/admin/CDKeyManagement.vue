@@ -4,7 +4,7 @@
       <div>
         <h1 class="text-3xl font-bold text-ink">CDK 卡密</h1>
         <p class="text-sm text-muted mt-2">
-          卡台 Open API 发码 · 服务费实时计价 · 完整码仅在成功响应中返回（请立即复制/导出）
+          卡台 Open API 发码 · 服务费实时计价 · 完整码本机缓存，列表可点复制
         </p>
       </div>
       <div class="flex flex-wrap gap-2">
@@ -74,13 +74,16 @@
           </div>
         </div>
 
-        <el-checkbox v-model="form.funding_confirmed" class="!items-start">
-          <span class="text-sm text-muted leading-snug">
-            确认 <b class="text-ink">funding_confirmed</b>：兑换时开卡/充值/订阅实付由本账户承担；
-            服务费 <b class="mono">${{ estimatedTotal }}</b>
-            （{{ form.count }} × ${{ feeOf(form.plan) }}）将从卡台余额扣除。
-          </span>
-        </el-checkbox>
+        <div class="funding-box">
+          <el-checkbox v-model="form.funding_confirmed" class="funding-check">
+            <span class="funding-check__title">确认承担兑换资金（funding_confirmed）</span>
+          </el-checkbox>
+          <p class="funding-check__hint">
+            兑换时开卡 / 充值 / 订阅实付由本账户承担。
+            服务费合计 <b class="mono text-ink">${{ estimatedTotal }}</b>
+            （{{ form.count }} × ${{ feeOf(form.plan) }}）从卡台余额扣除。
+          </p>
+        </div>
 
         <div v-if="issueError" class="alert alert-error">{{ issueError }}</div>
         <div v-if="issueOk" class="alert alert-success">{{ issueOk }}</div>
@@ -93,10 +96,10 @@
           :disabled="!canIssue"
           @click="issue"
         >
-          {{ issuing ? '购买中…' : `确认购买 ${form.count} 张 ${form.plan}` }}
+          {{ issuing ? '购买中…' : `确认购买 ${form.count} 张 ${planLabel(form.plan)}` }}
         </el-button>
         <p v-if="!configured" class="text-xs" style="color: var(--err)">请先在「卡台配置」填写 Base 与 sk_</p>
-        <p v-else-if="!form.funding_confirmed" class="text-xs text-muted">请勾选资金确认后发码</p>
+        <p v-else-if="!form.funding_confirmed" class="text-xs text-muted">请勾选上方资金确认后再发码</p>
 
         <div v-if="recentCodes.length" class="rounded-xl bg-soft p-4 space-y-3 border" style="border-color: var(--good)">
           <div class="flex flex-wrap items-center justify-between gap-2">
@@ -146,21 +149,38 @@
         <div class="card flex flex-wrap items-center justify-between gap-3 !py-3">
           <div>
             <h2 class="text-lg font-semibold text-ink">卡台 CDK 列表</h2>
-            <p class="text-xs text-muted">仅前缀与状态（完整码不会二次返回）· 共 {{ total }} 条</p>
+            <p class="text-xs text-muted">
+              完整码在本机缓存（发码成功时写入）；点击码即可复制 · 共 {{ total }} 条
+            </p>
           </div>
           <el-button :loading="loadingList" @click="loadList">刷新</el-button>
         </div>
         <div v-if="listError" class="alert alert-error">{{ listError }}</div>
         <div class="card overflow-hidden !p-0">
-          <el-table :data="rows" v-loading="loadingList" size="small" stripe empty-text="暂无数据">
-            <el-table-column prop="id" label="ID" width="80" />
-            <el-table-column prop="code_prefix" label="前缀（非完整码）" min-width="140">
+          <el-table :data="displayRows" v-loading="loadingList" size="small" stripe empty-text="暂无数据">
+            <el-table-column prop="id" label="ID" width="72" />
+            <el-table-column label="卡密" min-width="220">
               <template #default="{ row }">
-                <span class="mono break-all">{{ row.code_prefix || '—' }}</span>
-                <span v-if="row.code_prefix" class="text-xs text-subtle ml-1">{{ String(row.code_prefix).length }}字</span>
+                <button
+                  type="button"
+                  class="code-cell"
+                  :title="row.fullCode ? '点击复制完整码' : '仅有前缀，请到发码结果区复制完整码'"
+                  @click="copyRowCode(row)"
+                >
+                  <span class="mono break-all code-cell__text" :class="row.fullCode ? 'is-full' : 'is-prefix'">
+                    {{ row.displayCode || '—' }}
+                  </span>
+                  <span class="code-cell__meta">
+                    <el-tag v-if="row.fullCode" size="small" type="success" effect="plain">完整</el-tag>
+                    <el-tag v-else size="small" type="info" effect="plain">仅前缀</el-tag>
+                    <span class="text-subtle">{{ (row.displayCode || '').length }}字 · 点复制</span>
+                  </span>
+                </button>
               </template>
             </el-table-column>
-            <el-table-column prop="plan" label="套餐" width="100" />
+            <el-table-column prop="plan" label="套餐" width="100">
+              <template #default="{ row }">{{ planLabel(row.plan) }}</template>
+            </el-table-column>
             <el-table-column prop="status" label="状态" width="100">
               <template #default="{ row }">
                 <el-tag size="small" :type="statusType(row.status)">{{ row.status }}</el-tag>
@@ -193,8 +213,14 @@ import { dialog } from '../../lib/dialog'
 import { copyToClipboard } from '../../lib/clipboard'
 
 const RECENT_KEY = 'cdk_recent_issued_v1'
+/** 完整码本机持久缓存：卡台列表不再回传明文，发码成功时写入 */
+const CODE_CACHE_KEY = 'cdk_full_code_cache_v1'
 /** 卡台完整码形如 GPTD-xxxxxxxxxxxx-xxxxxxxxxxxx-xxxxxxxxxxxx（约 43 字符） */
 const FULL_CODE_MIN_LEN = 20
+
+type CodeCacheEntry = { code: string; plan?: string; prefix?: string; at?: number }
+/** id -> entry；prefix -> entry */
+const codeCache = ref<Record<string, CodeCacheEntry>>({})
 
 const plans = ref<Record<string, any>>({})
 const pricingVersion = ref<number | null>(null)
@@ -241,6 +267,18 @@ const canIssue = computed(() =>
   configured.value && form.funding_confirmed && form.count >= 1 && form.count <= 50 && !issuing.value,
 )
 
+/** 列表行：合并本机完整码缓存 */
+const displayRows = computed(() =>
+  rows.value.map((row) => {
+    const full = lookupFullCode(row)
+    return {
+      ...row,
+      fullCode: full,
+      displayCode: full || String(row.code_prefix || row.code || '').trim() || '',
+    }
+  }),
+)
+
 function feeDefault(k: string) {
   return k === 'plus' ? 1 : k === 'pro_5x' ? 5 : 10
 }
@@ -253,6 +291,14 @@ function feeOf(k: string) {
 function formatUsd(v: any) {
   const n = Number(v)
   return Number.isFinite(n) ? n.toFixed(2) : '—'
+}
+function planLabel(k: string) {
+  const p = plans.value[k]
+  if (p?.label) return p.label
+  if (k === 'plus') return 'Plus'
+  if (k === 'pro_5x') return 'Pro 5x'
+  if (k === 'pro_20x') return 'Pro 20x'
+  return k
 }
 const estimatedTotal = computed(() => {
   const unit = Number(feeOf(form.plan))
@@ -284,7 +330,59 @@ function extractFullCode(item: any): string {
     const s = String(raw || '').trim()
     if (isFullCode(s)) return s
   }
-  // 绝不把 code_prefix 当完整码
+  return ''
+}
+
+function loadCodeCache() {
+  try {
+    const raw = localStorage.getItem(CODE_CACHE_KEY)
+    if (!raw) return
+    const o = JSON.parse(raw)
+    if (o && typeof o === 'object') codeCache.value = o
+  } catch {
+    /* ignore */
+  }
+}
+
+function saveCodeCache() {
+  try {
+    localStorage.setItem(CODE_CACHE_KEY, JSON.stringify(codeCache.value))
+  } catch {
+    /* ignore quota */
+  }
+}
+
+function rememberIssued(items: any[], plan: string) {
+  const next = { ...codeCache.value }
+  for (const it of items) {
+    const code = extractFullCode(it)
+    if (!code) continue
+    const id = it?.id != null ? String(it.id) : ''
+    const prefix = String(it?.code_prefix || code.slice(0, 14) || '').trim()
+    const entry: CodeCacheEntry = { code, plan, prefix, at: Date.now() }
+    if (id) next[`id:${id}`] = entry
+    if (prefix) next[`pfx:${prefix}`] = entry
+    next[`code:${code}`] = entry
+  }
+  codeCache.value = next
+  saveCodeCache()
+}
+
+function lookupFullCode(row: any): string {
+  if (!row) return ''
+  const id = row.id != null ? String(row.id) : ''
+  const prefix = String(row.code_prefix || '').trim()
+  const direct = extractFullCode(row)
+  if (direct) return direct
+  const cache = codeCache.value
+  if (id && cache[`id:${id}`]?.code) return cache[`id:${id}`].code
+  if (prefix && cache[`pfx:${prefix}`]?.code) return cache[`pfx:${prefix}`].code
+  // 宽松：prefix 是完整码前缀
+  if (prefix) {
+    for (const v of Object.values(cache)) {
+      if (v?.code && v.code.startsWith(prefix)) return v.code
+    }
+  }
   return ''
 }
 
@@ -332,6 +430,20 @@ function clearRecent() {
 async function copyText(t: string) {
   const ok = await copyToClipboard(t)
   dialog.toast(ok ? '已复制' : '复制失败，请在文本框中全选手动复制', ok ? 'ok' : 'err')
+}
+
+async function copyRowCode(row: any) {
+  const code = row?.fullCode || row?.displayCode || ''
+  if (!code) {
+    dialog.toast('无可复制内容', 'warn')
+    return
+  }
+  const ok = await copyToClipboard(code)
+  if (!row.fullCode) {
+    dialog.toast(ok ? '已复制前缀（非完整码）' : '复制失败', ok ? 'warn' : 'err')
+  } else {
+    dialog.toast(ok ? '已复制完整卡密' : '复制失败', ok ? 'ok' : 'err')
+  }
 }
 
 async function loadMeta() {
@@ -404,10 +516,12 @@ async function issue() {
     const issued = Array.isArray(d.issued) ? d.issued : (Array.isArray(d.data?.issued) ? d.data.issued : [])
     const codes = issued.map(extractFullCode).filter(Boolean)
     if (!codes.length) {
-      issueError.value = '卡台返回成功但未包含完整码字段 code（请勿把列表里的前缀当卡密使用）。原始响应请查网络面板。'
+      issueError.value = '卡台返回成功但未包含完整码字段 code。原始响应请查网络面板。'
       recentCodes.value = []
       return
     }
+    // 本机缓存完整码，列表可展示并可点复制
+    rememberIssued(issued, form.plan)
     recentCodes.value = codes
     persistRecent(codes, form.plan)
     const shortOnes = codes.filter((c) => !isFullCode(c))
@@ -467,6 +581,7 @@ async function refreshAll() {
 }
 
 onMounted(async () => {
+  loadCodeCache()
   loadPersistedRecent()
   await refreshAll()
 })
@@ -478,4 +593,78 @@ onMounted(async () => {
 .plan-card--on { border-color: var(--primary) !important; box-shadow: 0 0 0 1px var(--primary-soft); }
 .mono { font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .select-all { user-select: all; -webkit-user-select: all; }
+
+/* funding 确认区：避免长文案撑破窄栏 */
+.funding-box {
+  border: 1px solid var(--brd);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: var(--surface-2);
+}
+.funding-check {
+  align-items: flex-start !important;
+  height: auto !important;
+  white-space: normal !important;
+  width: 100%;
+}
+.funding-check :deep(.el-checkbox__label) {
+  white-space: normal !important;
+  line-height: 1.45;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  padding-right: 0;
+}
+.funding-check :deep(.el-checkbox__input) {
+  margin-top: 3px;
+}
+.funding-check__title {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.funding-check__hint {
+  margin: 8px 0 0 22px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ink-2);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* 列表卡密：可点复制 */
+.code-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+}
+.code-cell:hover .code-cell__text.is-full {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.code-cell__text {
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-all;
+}
+.code-cell__text.is-full {
+  color: var(--good);
+}
+.code-cell__text.is-prefix {
+  color: var(--ink-2);
+}
+.code-cell__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
 </style>
