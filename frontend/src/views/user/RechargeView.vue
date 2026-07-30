@@ -13,6 +13,7 @@
         </div>
       </div>
 
+      <!-- redeem-flow v2: no public fee reference -->
       <!-- steps -->
       <div class="card mb-6">
         <div class="flex gap-2 text-sm flex-wrap">
