@@ -13,16 +13,6 @@
         </div>
       </div>
 
-      <!-- 服务费参考 -->
-      <div class="card mb-6 !py-4">
-        <div class="text-sm text-muted mb-2">套餐服务费参考（发码方已付；兑换不再收此费）· {{ plansSource }}</div>
-        <div class="flex flex-wrap gap-4 text-sm">
-          <span v-for="(p, k) in plans" :key="k" class="mono">
-            {{ p.label || k }}: <b>${{ Number(p.service_fee_usd ?? 0).toFixed(2) }}</b>
-          </span>
-        </div>
-      </div>
-
       <!-- steps -->
       <div class="card mb-6">
         <div class="flex gap-2 text-sm flex-wrap">
@@ -150,7 +140,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import LanguageToggle from '../../components/LanguageToggle.vue'
 import ThemeToggle from '../../components/ThemeToggle.vue'
@@ -175,9 +165,6 @@ const resultBody = ref<any>(null)
 const timeline = ref<any[]>([])
 const polling = ref(false)
 let pollTimer: any = null
-
-const plans = ref<Record<string, any>>({})
-const plansSource = ref('—')
 
 const deviceId = (() => {
   const k = 'cdk_device_id'
@@ -312,16 +299,6 @@ async function api(path: string, init: RequestInit = {}) {
   try { data = text ? JSON.parse(text) : null } catch { data = { raw: text } }
   return { r, data }
 }
-
-onMounted(async () => {
-  try {
-    const { r, data } = await api('/api/v1/public/cdk/plans')
-    if (r.ok && data?.plans) {
-      plans.value = data.plans
-      plansSource.value = data.source || 'live'
-    }
-  } catch { /* ignore */ }
-})
 
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
