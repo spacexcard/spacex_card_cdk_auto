@@ -553,14 +553,26 @@ func ConfirmRechargeTask(c *gin.Context) {
 
 // ===== Lookup APIs =====
 
-// LookupTaskByCDK looks up a task by CDK code
+// LookupTaskByCDK looks up a task by CDK code.
+// 新公开兑换走卡台 + cdk_session_bindings；旧 recharge_tasks 仅作兼容。
 func LookupTaskByCDK(c *gin.Context) {
 	cdkCode := strings.TrimSpace(c.Query("cdk_code"))
+	if cdkCode == "" {
+		cdkCode = strings.TrimSpace(c.Query("code"))
+	}
 	if cdkCode == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "CDK code required"})
 		return
 	}
 
+	// 1) 新链路：本站绑定 → 卡台 result
+	if bind, err := db.GetBindingByCDK(cdkCode); err == nil && bind != nil && strings.TrimSpace(bind.RedemptionToken) != "" {
+		// 复用 result-by-code 语义，但输出 HistoryView 兼容字段
+		PublicCDKResultByCode(c)
+		return
+	}
+
+	// 2) 旧表兼容
 	var task TaskInfo
 	var completedAt sql.NullTime
 	var accountEmail sql.NullString
@@ -568,14 +580,16 @@ func LookupTaskByCDK(c *gin.Context) {
 	err := db.DB.QueryRow(`
 		SELECT task_id, cdk_code, account_email, task_status, created_at, updated_at, completed_at
 		FROM recharge_tasks
-		WHERE cdk_code = ?
+		WHERE upper(trim(cdk_code)) = upper(trim(?))
 		ORDER BY created_at DESC
 		LIMIT 1
 	`, cdkCode).Scan(&task.TaskID, &task.CDKCode, &accountEmail, &task.TaskStatus,
 		&task.CreatedAt, &task.UpdatedAt, &completedAt)
 
 	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "未找到该卡密的兑换记录。请确认卡密正确；公开兑换进度请到「CDK 兑换」页用同一浏览器恢复，或使用账单查询。",
+		})
 		return
 	}
 

@@ -140,6 +140,14 @@ func setupRoutes(r *gin.Engine) {
 			pubCDK.POST("/preflight", handler.PublicCDKPreflight)
 			pubCDK.POST("/redeem", handler.PublicCDKRedeem)
 			pubCDK.GET("/result", handler.PublicCDKResult)
+			// 刷新进度 / 任务查询：凭卡密反查本站绑定的 redemption_token
+			pubCDK.GET("/result-by-code", handler.PublicCDKResultByCode)
+		}
+
+		// 任务查询（首页「任务查询」）：兼容旧 recharge_tasks + 新公开兑换绑定
+		lookup := api.Group("/lookup")
+		{
+			lookup.GET("/task", handler.LookupTaskByCDK)
 		}
 
 		// 卡台 Webhook（须在卡台开发者页配置 https://你的域名/api/v1/webhooks/cardplatform）

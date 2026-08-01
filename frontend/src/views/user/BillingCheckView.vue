@@ -55,14 +55,14 @@
             <a class="app-link underline" href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener">
               chatgpt.com/api/auth/session
             </a>
-            ，复制 JSON 或 accessToken。
+            ，复制<strong>完整 JSON</strong>（须含 sessionToken）。已禁用纯 Access Token。
           </div>
           <div class="form-group">
-            <label>Session / accessToken</label>
+            <label>完整 Session JSON</label>
             <textarea
               v-model="tokenInput"
               class="input h-36 font-mono text-xs"
-              placeholder='{"user":{...},"accessToken":"eyJ..."}'
+              placeholder='{"user":{...},"accessToken":"eyJ...","sessionToken":"eyJ..."}'
             />
           </div>
         </template>

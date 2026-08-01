@@ -43,9 +43,9 @@
         <template v-if="credMode === 'session'">
           <p class="text-sm text-muted">打开
             <a class="app-link" href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener">chatgpt.com/api/auth/session</a>
-            复制 JSON 或 accessToken。
+            复制<strong>完整 JSON</strong>（必须含 <code>sessionToken</code>）。已禁用纯 Access Token。
           </p>
-          <textarea v-model="sessionRaw" class="input h-36 font-mono text-xs" placeholder='{"accessToken":"eyJ..."} 或纯 session 串' />
+          <textarea v-model="sessionRaw" class="input h-36 font-mono text-xs" placeholder='{"user":{...},"accessToken":"eyJ...","sessionToken":"eyJ...五段JWE..."}' />
         </template>
         <template v-else>
           <input v-model="email" class="input" placeholder="email@outlook.com" />
@@ -141,7 +141,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import LanguageToggle from '../../components/LanguageToggle.vue'
 import ThemeToggle from '../../components/ThemeToggle.vue'
@@ -167,6 +167,8 @@ const timeline = ref<any[]>([])
 const polling = ref(false)
 let pollTimer: any = null
 
+const PROGRESS_KEY = 'cdk_redeem_progress_v1'
+
 const deviceId = (() => {
   const k = 'cdk_device_id'
   let v = localStorage.getItem(k)
@@ -176,6 +178,75 @@ const deviceId = (() => {
   }
   return v
 })()
+
+function saveProgress() {
+  try {
+    const payload = {
+      step: step.value,
+      code: code.value,
+      redemptionToken: redemptionToken.value,
+      preflightToken: preflightToken.value,
+      resultStatus: resultStatus.value,
+      resultStage: resultStage.value,
+      resultMessage: resultMessage.value,
+      resultBody: resultBody.value,
+      timeline: timeline.value,
+      savedAt: Date.now(),
+    }
+    sessionStorage.setItem(PROGRESS_KEY, JSON.stringify(payload))
+  } catch {
+    /* ignore quota */
+  }
+}
+
+function loadProgress(): boolean {
+  try {
+    const raw = sessionStorage.getItem(PROGRESS_KEY)
+    if (!raw) return false
+    const p = JSON.parse(raw)
+    if (!p || typeof p !== 'object') return false
+    // 超过 7 天丢弃
+    if (p.savedAt && Date.now() - Number(p.savedAt) > 7 * 24 * 3600 * 1000) {
+      sessionStorage.removeItem(PROGRESS_KEY)
+      return false
+    }
+    if (p.code) code.value = String(p.code)
+    if (p.redemptionToken) redemptionToken.value = String(p.redemptionToken)
+    if (p.preflightToken) preflightToken.value = String(p.preflightToken)
+    if (p.resultStatus) resultStatus.value = String(p.resultStatus)
+    if (p.resultStage) resultStage.value = String(p.resultStage)
+    if (p.resultMessage) resultMessage.value = String(p.resultMessage)
+    if (p.resultBody) resultBody.value = p.resultBody
+    if (Array.isArray(p.timeline)) timeline.value = p.timeline
+    const s = Number(p.step) || 1
+    // 有 token 即可恢复到结果页
+    if (redemptionToken.value && s >= 3) {
+      step.value = 4
+      return true
+    }
+    if (s >= 1 && s <= 4) {
+      step.value = s
+      return s > 1
+    }
+  } catch {
+    /* ignore */
+  }
+  return false
+}
+
+function clearProgress() {
+  try {
+    sessionStorage.removeItem(PROGRESS_KEY)
+  } catch {
+    /* ignore */
+  }
+}
+
+watch(
+  [step, code, redemptionToken, preflightToken, resultStatus, resultStage, resultMessage, resultBody, timeline],
+  () => saveProgress(),
+  { deep: true },
+)
 
 const resultPretty = computed(() => JSON.stringify(resultBody.value, null, 2))
 
@@ -305,18 +376,40 @@ onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
 })
 
+/** 完整 Session：必须含 sessionToken（JWE）；禁止纯 AT */
 function extractSession(raw: string): string {
   const s = raw.trim()
   if (!s) return ''
+  // 裸 JWE session-token
+  if (!s.startsWith('{') && s.split('.').length >= 5) return s
+  // 三段 JWT = 纯 AT → 拒绝
+  if (!s.startsWith('{') && s.startsWith('eyJ') && s.split('.').length === 3) return ''
   if (s.startsWith('{')) {
     try {
       const o = JSON.parse(s)
-      return o.accessToken || o.access_token || o.session || s
-    } catch {
+      const st = String(o.sessionToken || o.session_token || o.token?.sessionToken || '').trim()
+      if (!st) return ''
+      // 回传完整 JSON，便于预检绑定 session
       return s
+    } catch {
+      return ''
     }
   }
-  return s
+  return s.length > 40 ? s : ''
+}
+
+async function tryResumeByCode(cdk: string): Promise<boolean> {
+  const { r, data } = await api(
+    '/api/v1/public/cdk/result-by-code?code=' + encodeURIComponent(cdk),
+  )
+  if (!r.ok) return false
+  const tok = data?.redemption_token || data?.data?.redemption_token || ''
+  if (tok) redemptionToken.value = tok
+  applyResultPayload(data)
+  if (!resultStatus.value) resultStatus.value = data?.status || data?.order?.status || 'pending'
+  step.value = 4
+  startPoll()
+  return true
 }
 
 async function doPreview() {
@@ -328,12 +421,22 @@ async function doPreview() {
   }
   busy.value = true
   try {
+    const cdk = code.value.trim()
     const { r, data } = await api('/api/v1/public/cdk/preview', {
       method: 'POST',
-      body: JSON.stringify({ code: code.value.trim() }),
+      body: JSON.stringify({ code: cdk }),
     })
     if (!r.ok) {
-      error.value = data?.error || data?.msg || data?.message || 'CDK 无效或不可用'
+      const msg = data?.error || data?.msg || data?.message || 'CDK 无效或不可用'
+      // 已兑换：尝试用本站绑定恢复进度，而不是卡在第一步
+      if (/已兑换|已使用|used|redeemed|consumed|已消耗/i.test(String(msg))) {
+        const ok = await tryResumeByCode(cdk)
+        if (ok) {
+          error.value = ''
+          return
+        }
+      }
+      error.value = msg
       return
     }
     // 兼容多种返回结构
@@ -358,7 +461,7 @@ async function doPreflight() {
     if (credMode.value === 'session') {
       const session = extractSession(sessionRaw.value)
       if (!session) {
-        error.value = '请填写 session'
+        error.value = '请粘贴完整 Session JSON（必须含 sessionToken），不能只用 Access Token'
         return
       }
       credential = { mode: 'session', session }
@@ -372,6 +475,7 @@ async function doPreflight() {
     const { r, data } = await api('/api/v1/public/cdk/preflight', {
       method: 'POST',
       body: JSON.stringify({
+        code: code.value.trim(),
         redemption_token: redemptionToken.value,
         credential,
       }),
@@ -420,14 +524,30 @@ async function doRedeem() {
 
 function startPoll() {
   if (pollTimer) clearInterval(pollTimer)
+  if (!redemptionToken.value && !code.value.trim()) {
+    polling.value = false
+    return
+  }
   polling.value = true
   const tick = async () => {
     try {
-      const { r, data } = await api(
-        '/api/v1/public/cdk/result?token=' + encodeURIComponent(redemptionToken.value),
-      )
+      let r: Response
+      let data: any
+      if (redemptionToken.value) {
+        ;({ r, data } = await api(
+          '/api/v1/public/cdk/result?token=' + encodeURIComponent(redemptionToken.value),
+        ))
+      } else {
+        ;({ r, data } = await api(
+          '/api/v1/public/cdk/result-by-code?code=' + encodeURIComponent(code.value.trim()),
+        ))
+        if (r.ok && data?.redemption_token) {
+          redemptionToken.value = data.redemption_token
+        }
+      }
       if (r.ok) {
         applyResultPayload(data)
+        saveProgress()
         if (isTerminal(resultStatus.value)) {
           polling.value = false
           if (pollTimer) clearInterval(pollTimer)
@@ -441,8 +561,17 @@ function startPoll() {
   pollTimer = setInterval(tick, 3000)
 }
 
+onMounted(() => {
+  if (loadProgress()) {
+    if (step.value === 4 && (redemptionToken.value || code.value)) {
+      startPoll()
+    }
+  }
+})
+
 function resetAll() {
   if (pollTimer) clearInterval(pollTimer)
+  clearProgress()
   step.value = 1
   error.value = ''
   code.value = ''

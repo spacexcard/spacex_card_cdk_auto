@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -471,12 +472,24 @@ func PublicCDKPreflight(c *gin.Context) {
 		return
 	}
 	// 预检成功：把 credential.session 绑到卡密（账单页可凭卡密查）
-	if st >= 200 && st < 300 {
-		tok := str(body["redemption_token"])
-		sess := extractCredentialSession(body["credential"])
-		if sess != "" {
-			_ = db.BindCDKSession("", tok, sess)
+	// 即便上游返回非 2xx，只要本地能解析到 session 也尽量落库，方便后续账单查询。
+	tok := str(body["redemption_token"])
+	if tok == "" {
+		tok = extractJSONString(raw, "redemption_token", "token")
+	}
+	code := str(body["code"])
+	if code == "" {
+		if found, err := db.FindCodeByRedemptionToken(tok); err == nil && found != "" {
+			code = found
 		}
+	}
+	sess := extractCredentialSession(body["credential"])
+	if sess != "" && (code != "" || tok != "") {
+		if err := db.BindCDKSession(code, tok, sess); err != nil {
+			log.Printf("[cdk-preflight] bind session failed code=%s tok=%s: %v", code, shortTok(tok), err)
+		}
+	} else if st >= 200 && st < 300 {
+		log.Printf("[cdk-preflight] no session to bind (mode may be mailbox) tok=%s", shortTok(tok))
 	}
 	proxyPublicJSON(c, st, raw)
 }
@@ -511,6 +524,54 @@ func PublicCDKResult(c *gin.Context) {
 		return
 	}
 	proxyPublicJSON(c, st, raw)
+}
+
+// PublicCDKResultByCode GET /api/v1/public/cdk/result-by-code?code=
+// 用卡密反查本站绑定的 redemption_token，再转发卡台 result（刷新进度 / 任务查询用）
+func PublicCDKResultByCode(c *gin.Context) {
+	code := strings.TrimSpace(c.Query("code"))
+	if code == "" {
+		code = strings.TrimSpace(c.Query("cdk_code"))
+	}
+	if code == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "code required"})
+		return
+	}
+	bind, err := db.GetBindingByCDK(code)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询绑定失败"})
+		return
+	}
+	if bind == nil || strings.TrimSpace(bind.RedemptionToken) == "" {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "未找到该卡密的兑换记录。请确认卡密正确；若刚在本机兑换过，请用同一浏览器打开兑换页（进度会自动恢复）。",
+		})
+		return
+	}
+	cli := cardplatform.NewFromSettings()
+	st, raw, err := cli.Result(c.Request.Context(), bind.RedemptionToken, deviceFrom(c))
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	// 附带本站元信息，前端可恢复轮询 token
+	var payload map[string]any
+	if json.Unmarshal(raw, &payload) != nil || payload == nil {
+		proxyPublicJSON(c, st, raw)
+		return
+	}
+	payload["cdk_code"] = bind.CDKCode
+	payload["redemption_token"] = bind.RedemptionToken
+	payload["has_session_binding"] = strings.TrimSpace(bind.SessionPayload) != ""
+	c.JSON(st, payload)
+}
+
+func shortTok(tok string) string {
+	tok = strings.TrimSpace(tok)
+	if len(tok) <= 12 {
+		return tok
+	}
+	return tok[:8] + "…"
 }
 
 // PublicCDKPlans GET /api/v1/public/cdk/plans
@@ -605,19 +666,40 @@ func extractJSONNestedString(raw json.RawMessage, nest, key string) string {
 	return str(inner[key])
 }
 
+// extractCredentialSession 绑定账单用：优先保留完整 session 材料（sessionToken 或整段 JSON）。
+// 纯 accessToken 不再接受（无法 force-refresh）。
 func extractCredentialSession(cred any) string {
 	m, ok := cred.(map[string]any)
 	if !ok {
 		return ""
 	}
-	// session 模式
 	if s := str(m["session"]); s != "" {
+		if looksLikeBareAccessToken(s) {
+			return ""
+		}
+		// JSON 无 sessionToken 则拒
+		if strings.HasPrefix(s, "{") {
+			var o map[string]any
+			if json.Unmarshal([]byte(s), &o) == nil {
+				st := str(o["sessionToken"])
+				if st == "" {
+					st = str(o["session_token"])
+				}
+				if st == "" {
+					return ""
+				}
+			}
+		}
 		return s
 	}
-	// 整段 JSON 也可
-	if s := str(m["accessToken"]); s != "" {
-		return s
-	}
-	// mailbox 不存密码做账单（无 token）
+	// 不再单独接受 accessToken 字段
 	return ""
+}
+
+func looksLikeBareAccessToken(raw string) bool {
+	s := strings.TrimSpace(raw)
+	if !strings.HasPrefix(s, "eyJ") {
+		return false
+	}
+	return len(strings.Split(s, ".")) == 3
 }

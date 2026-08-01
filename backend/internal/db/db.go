@@ -648,6 +648,59 @@ func GetSessionByCDK(cdkCode string) (string, error) {
 	return sess, err
 }
 
+// CDKBinding 本地码 ↔ token ↔ session 绑定（公开兑换进度/账单依赖）
+type CDKBinding struct {
+	CDKCode         string
+	RedemptionToken string
+	SessionPayload  string
+	UpdatedAt       string
+}
+
+// GetBindingByCDK 按卡密取绑定（session 可为空：仅 preview 过）
+func GetBindingByCDK(cdkCode string) (*CDKBinding, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not ready")
+	}
+	code := normalizeCDKCode(cdkCode)
+	if code == "" {
+		return nil, nil
+	}
+	var b CDKBinding
+	err := DB.QueryRow(`
+		SELECT cdk_code, COALESCE(redemption_token,''), COALESCE(session_payload,''), COALESCE(updated_at,'')
+		FROM cdk_session_bindings
+		WHERE cdk_code = ?
+	`, code).Scan(&b.CDKCode, &b.RedemptionToken, &b.SessionPayload, &b.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &b, nil
+}
+
+// FindCodeByRedemptionToken 预检绑 session 时反查完整卡密
+func FindCodeByRedemptionToken(redemptionToken string) (string, error) {
+	if DB == nil {
+		return "", fmt.Errorf("db not ready")
+	}
+	tok := strings.TrimSpace(redemptionToken)
+	if tok == "" {
+		return "", nil
+	}
+	var code string
+	err := DB.QueryRow(`
+		SELECT cdk_code FROM cdk_session_bindings
+		WHERE redemption_token = ?
+		LIMIT 1
+	`, tok).Scan(&code)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return code, err
+}
+
 func migrateCDKPlanTypes() error {
 	updates := []struct {
 		from string
