@@ -27,7 +27,12 @@ echo "==> pack"
 rm -rf "$ROOT/dist/web"
 mkdir -p "$ROOT/dist/web" "$ROOT/dist/data"
 cp -a "$ROOT/frontend/dist/." "$ROOT/dist/web/"
-tar -C "$ROOT/dist" -czf "$ROOT/dist/cdk-bundle.tgz" cdk-recharge web
+PACK_ITEMS=(cdk-recharge web)
+if [[ -f "$ROOT/VERSION" ]]; then
+  cp -f "$ROOT/VERSION" "$ROOT/dist/VERSION"
+  PACK_ITEMS+=(VERSION)
+fi
+tar -C "$ROOT/dist" -czf "$ROOT/dist/cdk-bundle.tgz" "${PACK_ITEMS[@]}"
 
 echo "==> upload"
 "${SSH[@]}" "mkdir -p $REMOTE_DIR/data $REMOTE_DIR/web"
@@ -40,6 +45,10 @@ JWT_NEW=$(openssl rand -hex 24)
 "${SSH[@]}" bash -s <<REMOTE
 set -euo pipefail
 cd $REMOTE_DIR
+# 备份当前二进制，便于回滚
+if [[ -x $REMOTE_DIR/cdk-recharge ]]; then
+  cp -a $REMOTE_DIR/cdk-recharge $REMOTE_DIR/cdk-recharge.bak.\$(date +%Y%m%d%H%M%S)
+fi
 tar -xzf /tmp/cdk-bundle.tgz -C $REMOTE_DIR
 chmod +x $REMOTE_DIR/cdk-recharge
 if [[ ! -f $REMOTE_DIR/app.env ]]; then
