@@ -214,21 +214,68 @@ func CardPlatformListCDKs(c *gin.Context) {
 
 // CardPlatformListCDKOrders GET /api/v1/admin/cardplatform/cdk-orders
 // 对账列表：卡台 CDK 兑换订单；若上游暂未带 code_prefix/cdk_status，则本站按 cdk_id 补齐。
+// 支持 page / page_size(1–100) / status / cdk_id / order_id。
 func CardPlatformListCDKOrders(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	ps, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if ps < 1 {
+		ps = 20
+	}
+	if ps > 100 {
+		ps = 100
+	}
+	q := cardplatform.CDKOrderListQuery{
+		Page:     page,
+		PageSize: ps,
+		Status:   strings.TrimSpace(c.Query("status")),
+		CDKID:    int64Any(c.Query("cdk_id")),
+		OrderID:  int64Any(c.Query("order_id")),
+	}
 	cli := cardplatform.NewFromSettings()
-	raw, err := cli.ListCDKOrders(c.Request.Context(), page, ps)
+	raw, err := cli.ListCDKOrdersQuery(c.Request.Context(), q)
 	if err != nil {
 		writeCardErr(c, err)
 		return
 	}
 	if len(raw) == 0 {
-		c.JSON(http.StatusOK, gin.H{"list": []any{}, "total": 0})
+		c.JSON(http.StatusOK, gin.H{"list": []any{}, "total": 0, "page": page, "page_size": ps})
 		return
 	}
 	enriched := enrichCDKOrderList(c, cli, raw)
+	enriched["page"] = page
+	enriched["page_size"] = ps
 	c.JSON(http.StatusOK, enriched)
+}
+
+// CardPlatformDeleteCard DELETE /api/v1/admin/cardplatform/cards/:id
+// 代理卡台 DELETE /cards/{id}：永久删卡并把卡内余额退回平台余额。
+func CardPlatformDeleteCard(c *gin.Context) {
+	id := strings.TrimSpace(c.Param("id"))
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "card id required"})
+		return
+	}
+	cli := cardplatform.NewFromSettings()
+	raw, err := cli.DeleteCard(c.Request.Context(), id)
+	if err != nil {
+		writeCardErr(c, err)
+		return
+	}
+	u, _ := c.Get("username")
+	username, _ := u.(string)
+	db.WriteAudit(username, "cardplatform_delete_card", "card_id="+id, c.ClientIP())
+	// 上游 data 可能为空（仅 msg），统一给前端可消费结构
+	out := gin.H{"ok": true, "card_id": id, "message": "删卡成功，余额已退回"}
+	if len(raw) > 0 && string(raw) != "null" {
+		var m any
+		if json.Unmarshal(raw, &m) == nil && m != nil {
+			out["data"] = m
+		}
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 // CardPlatformGetCDKOrder GET /api/v1/admin/cardplatform/cdk-orders/:id
@@ -265,12 +312,10 @@ func enrichCDKOrderList(c *gin.Context, cli *cardplatform.Client, raw json.RawMe
 		return gin.H{"list": []any{}, "total": 0, "parse_error": true}
 	}
 	listAny, _ := envelope["list"].([]any)
-	total := 0
-	switch t := envelope["total"].(type) {
-	case float64:
-		total = int(t)
-	case int:
-		total = t
+	total := int64Any(envelope["total"])
+	// 兜底：上游 total 缺失时至少不低于本页条数，避免前端「共 0 笔」把下一页锁死
+	if total <= 0 && len(listAny) > 0 {
+		total = int64(len(listAny))
 	}
 	// 收集需要补全的 cdk_id
 	needCDK := false

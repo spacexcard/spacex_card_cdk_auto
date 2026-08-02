@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -444,16 +445,42 @@ func anyToInt(v any) int {
 	}
 }
 
+// CDKOrderListQuery 对账列表查询参数（转发卡台 OpenAPI）。
+type CDKOrderListQuery struct {
+	Page     int
+	PageSize int
+	Status   string // completed / queued / ...
+	CDKID    int64
+	OrderID  int64
+}
+
 // ListCDKOrders GET /gpt-direct/cdk-orders
 func (c *Client) ListCDKOrders(ctx context.Context, page, pageSize int) (json.RawMessage, error) {
+	return c.ListCDKOrdersQuery(ctx, CDKOrderListQuery{Page: page, PageSize: pageSize})
+}
+
+// ListCDKOrdersQuery GET /gpt-direct/cdk-orders?page=&page_size=&status=&cdk_id=&order_id=
+func (c *Client) ListCDKOrdersQuery(ctx context.Context, q CDKOrderListQuery) (json.RawMessage, error) {
+	page, pageSize := q.Page, q.PageSize
 	if page < 1 {
 		page = 1
 	}
 	if pageSize < 1 || pageSize > 100 {
 		pageSize = 20
 	}
-	path := fmt.Sprintf("/gpt-direct/cdk-orders?page=%d&page_size=%d", page, pageSize)
-	return c.doOpenAPI(ctx, http.MethodGet, path, nil, "")
+	v := url.Values{}
+	v.Set("page", strconv.Itoa(page))
+	v.Set("page_size", strconv.Itoa(pageSize))
+	if s := strings.TrimSpace(q.Status); s != "" {
+		v.Set("status", strings.ToLower(s))
+	}
+	if q.CDKID > 0 {
+		v.Set("cdk_id", strconv.FormatInt(q.CDKID, 10))
+	}
+	if q.OrderID > 0 {
+		v.Set("order_id", strconv.FormatInt(q.OrderID, 10))
+	}
+	return c.doOpenAPI(ctx, http.MethodGet, "/gpt-direct/cdk-orders?"+v.Encode(), nil, "")
 }
 
 // GetCDKOrder GET /gpt-direct/cdk-orders/:id
@@ -463,6 +490,15 @@ func (c *Client) GetCDKOrder(ctx context.Context, id string) (json.RawMessage, e
 		return nil, &APIError{HTTPStatus: 400, Msg: "id required"}
 	}
 	return c.doOpenAPI(ctx, http.MethodGet, "/gpt-direct/cdk-orders/"+url.PathEscape(id), nil, "")
+}
+
+// DeleteCard DELETE /cards/{id} — 永久删卡，卡内余额退回平台余额。
+func (c *Client) DeleteCard(ctx context.Context, cardID string) (json.RawMessage, error) {
+	cardID = strings.TrimSpace(cardID)
+	if cardID == "" {
+		return nil, &APIError{HTTPStatus: 400, Msg: "card id required"}
+	}
+	return c.doOpenAPI(ctx, http.MethodDelete, "/cards/"+url.PathEscape(cardID), nil, "")
 }
 
 // ---- 公开兑换（无需 API Key）----

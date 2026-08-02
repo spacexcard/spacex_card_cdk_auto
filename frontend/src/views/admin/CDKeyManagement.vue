@@ -194,12 +194,19 @@
             <el-table-column prop="created_at" label="时间" min-width="140" />
           </el-table>
         </div>
-        <div class="flex items-center justify-between text-sm text-muted">
-          <span>第 {{ page }} 页</span>
-          <div class="flex gap-2">
-            <el-button size="small" :disabled="page <= 1" @click="page--; loadList()">上一页</el-button>
-            <el-button size="small" :disabled="page * pageSize >= total" @click="page++; loadList()">下一页</el-button>
-          </div>
+        <div class="flex flex-wrap items-center justify-between gap-3 text-sm text-muted">
+          <span>第 {{ page }} 页 · 共 {{ total }} 条</span>
+          <el-pagination
+            background
+            layout="total, sizes, prev, pager, next"
+            :total="total"
+            :page-size="pageSize"
+            :current-page="page"
+            :page-sizes="[20, 50, 100]"
+            :disabled="loadingList"
+            @current-change="(p: number) => { page = p; loadList() }"
+            @size-change="(s: number) => { pageSize = s; page = 1; loadList() }"
+          />
         </div>
       </section>
     </div>
@@ -245,7 +252,7 @@ const recentMeta = ref<{ plan: string; atLabel: string } | null>(null)
 const rows = ref<any[]>([])
 const total = ref(0)
 const page = ref(1)
-const pageSize = 20
+const pageSize = ref(20)
 const loadingList = ref(false)
 const listError = ref('')
 
@@ -549,7 +556,7 @@ async function loadList() {
   loadingList.value = true
   listError.value = ''
   try {
-    const r = await authFetch(`/api/v1/admin/cardplatform/cdks?page=${page.value}&page_size=${pageSize}`)
+    const r = await authFetch(`/api/v1/admin/cardplatform/cdks?page=${page.value}&page_size=${pageSize.value}`)
     const d = await r.json().catch(() => ({}))
     if (!r.ok) {
       listError.value = d.error || d.msg || '列表失败'

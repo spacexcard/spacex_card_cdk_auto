@@ -182,6 +182,7 @@ func setupRoutes(r *gin.Engine) {
 			admin.POST("/cardplatform/cdks", handler.CardPlatformIssueCDKs)
 			admin.GET("/cardplatform/cdk-orders", handler.CardPlatformListCDKOrders)
 			admin.GET("/cardplatform/cdk-orders/:id", handler.CardPlatformGetCDKOrder)
+			admin.DELETE("/cardplatform/cards/:id", handler.CardPlatformDeleteCard)
 
 			// Webhook 事件列表 + 配置提示
 			admin.GET("/webhooks/events", handler.AdminListWebhooks)

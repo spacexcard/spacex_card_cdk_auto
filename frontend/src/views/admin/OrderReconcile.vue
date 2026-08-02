@@ -14,17 +14,24 @@
 
     <div class="card !py-3 flex flex-wrap items-center gap-3 text-sm">
       <span class="text-muted">共 <b class="mono text-ink">{{ total }}</b> 笔</span>
-      <el-select v-model="statusFilter" clearable placeholder="订单状态" style="width: 150px" @change="page = 1; load()">
+      <el-select
+        v-model="statusFilter"
+        clearable
+        placeholder="订单状态"
+        style="width: 150px"
+        @change="onFilterChange"
+      >
         <el-option v-for="s in statusOptions" :key="s" :label="s" :value="s" />
       </el-select>
       <el-input
         v-model="emailQ"
         clearable
-        placeholder="邮箱关键字"
+        placeholder="邮箱关键字（本页）"
         style="width: 200px"
-        @keyup.enter="page = 1; load()"
+        @keyup.enter="onFilterChange"
+        @clear="onFilterChange"
       />
-      <el-button @click="page = 1; load()">筛选</el-button>
+      <el-button @click="onFilterChange">筛选</el-button>
     </div>
 
     <div v-if="error" class="alert alert-error">{{ error }}</div>
@@ -71,20 +78,39 @@
             <div class="text-xs text-subtle">创建 {{ fmtTime(row.created_at) }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="88" fixed="right">
+        <el-table-column label="操作" width="148" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openDetail(row)">详情</el-button>
+            <el-button
+              v-if="rowCardId(row)"
+              link
+              type="danger"
+              size="small"
+              :loading="deletingId === String(rowCardId(row))"
+              @click="deleteCard(row)"
+            >
+              删卡
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
     </div>
 
-    <div class="flex items-center justify-between text-sm text-muted">
-      <span>第 {{ page }} 页 · 每页 {{ pageSize }}</span>
-      <div class="flex gap-2">
-        <el-button size="small" :disabled="page <= 1" @click="page--; load()">上一页</el-button>
-        <el-button size="small" :disabled="page * pageSize >= total" @click="page++; load()">下一页</el-button>
-      </div>
+    <div class="flex flex-wrap items-center justify-between gap-3 text-sm text-muted">
+      <span>
+        第 {{ page }} / {{ totalPages }} 页 · 本页 {{ displayRows.length }} 条
+      </span>
+      <el-pagination
+        background
+        layout="total, sizes, prev, pager, next, jumper"
+        :total="total"
+        :page-size="pageSize"
+        :current-page="page"
+        :page-sizes="[20, 50, 100]"
+        :disabled="loading"
+        @current-change="onPageChange"
+        @size-change="onSizeChange"
+      />
     </div>
 
     <el-drawer v-model="detailOpen" title="订单详情" size="420px">
@@ -97,6 +123,7 @@
           <el-descriptions-item label="套餐">{{ detail.plan || '—' }}</el-descriptions-item>
           <el-descriptions-item label="用户邮箱">{{ detail.account_email || '—' }}</el-descriptions-item>
           <el-descriptions-item label="使用卡片">{{ cardLabel(detail) }}</el-descriptions-item>
+          <el-descriptions-item label="卡 ID">{{ rowCardId(detail) || '—' }}</el-descriptions-item>
           <el-descriptions-item label="卡充值额">{{ fundingCardLabel(detail) }}</el-descriptions-item>
           <el-descriptions-item label="实付">{{ amountLabel(detail) }}</el-descriptions-item>
           <el-descriptions-item label="服务费">{{ feeLabel(detail) }}（{{ detail.service_fee_status || '—' }}）</el-descriptions-item>
@@ -111,6 +138,19 @@
           </el-descriptions-item>
           <el-descriptions-item v-if="detail.user_message" label="说明">{{ detail.user_message }}</el-descriptions-item>
         </el-descriptions>
+        <div v-if="rowCardId(detail)" class="mt-4">
+          <el-button
+            type="danger"
+            plain
+            :loading="deletingId === String(rowCardId(detail))"
+            @click="deleteCard(detail)"
+          >
+            删除虚拟卡（余额退回）
+          </el-button>
+          <p class="text-xs text-muted mt-2">
+            调用卡台 <code>DELETE /cards/{id}</code>，永久销卡并将卡内余额退回平台余额。
+          </p>
+        </div>
       </template>
     </el-drawer>
   </div>
@@ -119,17 +159,19 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { authFetch } from '../../lib/api'
+import { dialog } from '../../lib/dialog'
 
 const rows = ref<any[]>([])
 const total = ref(0)
 const page = ref(1)
-const pageSize = 20
+const pageSize = ref(20)
 const loading = ref(false)
 const error = ref('')
 const statusFilter = ref('')
 const emailQ = ref('')
 const detailOpen = ref(false)
 const detail = ref<any>(null)
+const deletingId = ref('')
 
 const statusOptions = [
   'completed',
@@ -142,12 +184,17 @@ const statusOptions = [
   'cancelled',
 ]
 
+const totalPages = computed(() => {
+  const t = total.value
+  const s = pageSize.value
+  if (t <= 0) return 1
+  return Math.max(1, Math.ceil(t / s))
+})
+
+/** 状态已服务端筛选；邮箱仍为本页关键字过滤（卡台 OpenAPI 无 email 参数） */
 const displayRows = computed(() => {
   let list = rows.value
   const q = emailQ.value.trim().toLowerCase()
-  if (statusFilter.value) {
-    list = list.filter((r) => r.status === statusFilter.value)
-  }
   if (q) {
     list = list.filter((r) => String(r.account_email || '').toLowerCase().includes(q))
   }
@@ -167,7 +214,6 @@ function amountLabel(row: any) {
 }
 
 function feeLabel(row: any) {
-  // 服务费一般是 USD 分
   const n = Number(row.service_fee_minor)
   if (!Number.isFinite(n)) return '—'
   return `$${(n / 100).toFixed(2)}`
@@ -184,6 +230,13 @@ function cardLabel(row: any) {
   if (row.card_last_four) return `•••• ${row.card_last_four}`
   if (row.card_id) return `card#${row.card_id}`
   return '—'
+}
+
+function rowCardId(row: any): string | number | '' {
+  if (!row) return ''
+  const id = row.card_id ?? row.local_card_id ?? row.vm_card_id
+  if (id == null || id === '') return ''
+  return id
 }
 
 function fmtTime(v: any) {
@@ -214,13 +267,31 @@ function cdkTagType(row: any) {
   return ''
 }
 
+function onFilterChange() {
+  page.value = 1
+  load()
+}
+
+function onPageChange(p: number) {
+  page.value = p
+  load()
+}
+
+function onSizeChange(s: number) {
+  pageSize.value = s
+  page.value = 1
+  load()
+}
+
 async function load() {
   loading.value = true
   error.value = ''
   try {
-    const r = await authFetch(
-      `/api/v1/admin/cardplatform/cdk-orders?page=${page.value}&page_size=${pageSize}`,
-    )
+    const params = new URLSearchParams()
+    params.set('page', String(page.value))
+    params.set('page_size', String(pageSize.value))
+    if (statusFilter.value) params.set('status', statusFilter.value)
+    const r = await authFetch(`/api/v1/admin/cardplatform/cdk-orders?${params}`)
     const d = await r.json().catch(() => ({}))
     if (!r.ok) {
       error.value = d.error || d.msg || '加载失败（检查卡台 Key / 出口 IP）'
@@ -228,8 +299,17 @@ async function load() {
       total.value = 0
       return
     }
-    rows.value = d.list || []
-    total.value = d.total || 0
+    const list = Array.isArray(d.list) ? d.list : []
+    rows.value = list
+    let t = Number(d.total)
+    if (!Number.isFinite(t) || t < 0) t = 0
+    // total 缺失但本页满页时，至少允许往后翻
+    if (t === 0 && list.length >= pageSize.value) {
+      t = page.value * pageSize.value + 1
+    } else if (t < list.length) {
+      t = list.length
+    }
+    total.value = t
   } catch (e: any) {
     error.value = e?.message || '网络错误'
   } finally {
@@ -250,6 +330,40 @@ async function openDetail(row: any) {
     }
   } catch {
     /* keep list row */
+  }
+}
+
+async function deleteCard(row: any) {
+  const id = rowCardId(row)
+  if (!id) {
+    dialog.toast('无 card_id，无法删卡', 'warn')
+    return
+  }
+  const label = cardLabel(row)
+  const ok = await dialog.confirm(
+    `确认删除虚拟卡 ${label}（id=${id}）？\n卡内余额将退回卡台平台余额，此操作不可撤销。`,
+    { title: '删除虚拟卡', okText: '确认删除', cancelText: '取消', danger: true },
+  )
+  if (!ok) return
+  deletingId.value = String(id)
+  try {
+    const r = await authFetch(`/api/v1/admin/cardplatform/cards/${encodeURIComponent(String(id))}`, {
+      method: 'DELETE',
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      dialog.toast(d.error || d.msg || '删卡失败', 'err')
+      return
+    }
+    dialog.toast(d.message || '删卡成功，余额已退回', 'ok')
+    if (detail.value && String(rowCardId(detail.value)) === String(id)) {
+      detail.value = { ...detail.value, card_deleted: true }
+    }
+    await load()
+  } catch (e: any) {
+    dialog.toast(e?.message || '网络错误', 'err')
+  } finally {
+    deletingId.value = ''
   }
 }
 
