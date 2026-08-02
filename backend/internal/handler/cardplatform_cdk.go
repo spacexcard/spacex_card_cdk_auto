@@ -173,12 +173,15 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 	})
 }
 
-// CardPlatformListCDKs GET /api/v1/admin/cardplatform/cdks?page=&page_size=
+// CardPlatformListCDKs GET /api/v1/admin/cardplatform/cdks?page=&page_size=&q=&status=&plan=
 func CardPlatformListCDKs(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	ps, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	cli := cardplatform.NewFromSettings()
-	res, err := cli.ListCDKs(c.Request.Context(), page, ps)
+	res, err := cli.ListCDKsQuery(c.Request.Context(), cardplatform.CDKListQuery{
+		Page: page, PageSize: ps,
+		Status: c.Query("status"), Plan: c.Query("plan"), Query: c.Query("q"),
+	})
 	if err != nil {
 		writeCardErr(c, err)
 		return

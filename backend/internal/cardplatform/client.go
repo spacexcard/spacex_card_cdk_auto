@@ -334,14 +334,40 @@ type CDKListResult struct {
 	Total int           `json:"total"`
 }
 
+// CDKListQuery 卡台 Open API 列 CDK 筛选。
+type CDKListQuery struct {
+	Page     int
+	PageSize int
+	Status   string
+	Plan     string
+	Query    string // q：id / code_prefix 模糊
+}
+
 func (c *Client) ListCDKs(ctx context.Context, page, pageSize int) (*CDKListResult, error) {
+	return c.ListCDKsQuery(ctx, CDKListQuery{Page: page, PageSize: pageSize})
+}
+
+func (c *Client) ListCDKsQuery(ctx context.Context, q CDKListQuery) (*CDKListResult, error) {
+	page, pageSize := q.Page, q.PageSize
 	if page < 1 {
 		page = 1
 	}
 	if pageSize < 1 || pageSize > 100 {
 		pageSize = 20
 	}
-	path := fmt.Sprintf("/gpt-direct/cdks?page=%d&page_size=%d", page, pageSize)
+	vals := url.Values{}
+	vals.Set("page", strconv.Itoa(page))
+	vals.Set("page_size", strconv.Itoa(pageSize))
+	if s := strings.TrimSpace(q.Status); s != "" {
+		vals.Set("status", s)
+	}
+	if p := strings.TrimSpace(q.Plan); p != "" {
+		vals.Set("plan", p)
+	}
+	if raw := strings.TrimSpace(q.Query); raw != "" {
+		vals.Set("q", raw)
+	}
+	path := "/gpt-direct/cdks?" + vals.Encode()
 	data, err := c.doOpenAPI(ctx, http.MethodGet, path, nil, "")
 	if err != nil {
 		return nil, err

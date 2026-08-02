@@ -155,6 +155,25 @@
           </div>
           <el-button :loading="loadingList" @click="loadList">刷新</el-button>
         </div>
+        <div class="card flex flex-wrap items-center gap-2 !py-3">
+          <el-input
+            v-model="listQ"
+            clearable
+            class="!w-[240px]"
+            placeholder="模糊搜索：ID / 码前缀"
+            @keyup.enter="searchList"
+            @clear="searchList"
+          />
+          <el-select v-model="listStatus" clearable placeholder="状态" class="!w-[140px]" @change="searchList">
+            <el-option v-for="s in statusOptions" :key="s" :label="s" :value="s" />
+          </el-select>
+          <el-select v-model="listPlan" clearable placeholder="套餐" class="!w-[140px]" @change="searchList">
+            <el-option label="Plus" value="plus" />
+            <el-option label="Pro 5x" value="pro_5x" />
+            <el-option label="Pro 20x" value="pro_20x" />
+          </el-select>
+          <el-button type="primary" :loading="loadingList" @click="searchList">查询</el-button>
+        </div>
         <div v-if="listError" class="alert alert-error">{{ listError }}</div>
         <div class="card overflow-hidden !p-0">
           <el-table :data="displayRows" v-loading="loadingList" size="small" stripe empty-text="暂无数据">
@@ -255,6 +274,10 @@ const page = ref(1)
 const pageSize = ref(20)
 const loadingList = ref(false)
 const listError = ref('')
+const listQ = ref('')
+const listStatus = ref('')
+const listPlan = ref('')
+const statusOptions = ['unused', 'reserved', 'consumed', 'frozen', 'disabled', 'review']
 
 const planCards = computed(() => {
   const order = ['plus', 'pro_5x', 'pro_20x']
@@ -552,11 +575,23 @@ async function issue() {
   }
 }
 
+function searchList() {
+  page.value = 1
+  return loadList()
+}
+
 async function loadList() {
   loadingList.value = true
   listError.value = ''
   try {
-    const r = await authFetch(`/api/v1/admin/cardplatform/cdks?page=${page.value}&page_size=${pageSize.value}`)
+    const qs = new URLSearchParams({
+      page: String(page.value),
+      page_size: String(pageSize.value),
+    })
+    if (listQ.value.trim()) qs.set('q', listQ.value.trim())
+    if (listStatus.value) qs.set('status', listStatus.value)
+    if (listPlan.value) qs.set('plan', listPlan.value)
+    const r = await authFetch(`/api/v1/admin/cardplatform/cdks?${qs.toString()}`)
     const d = await r.json().catch(() => ({}))
     if (!r.ok) {
       listError.value = d.error || d.msg || '列表失败'

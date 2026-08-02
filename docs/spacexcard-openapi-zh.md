@@ -931,7 +931,13 @@ curl -X POST https://spacexcard.com/openapi/v1/gpt-direct/orders \
 
 `count` 默認 1，單次最多 50 張；每張 CDK 分別按 `1 / 5 / 10 U` 服務費扣款。明文 `code` 只在成功響應返回一次，請立即加密保存，不要寫入日誌。
 
-`GET /gpt-direct/cdks?page=1&page_size=20` 返回當前用戶購買或持有的 CDK（`data.list`、`data.total`）。CDK 狀態包括 `unused`、`reserved`、`consumed`、`frozen`、`disabled`；訂單成功後從 `reserved` 變為 `consumed`。
+`GET /gpt-direct/cdks?page=1&page_size=20` 返回當前用戶購買或持有的 CDK（`data.list`、`data.total`）。
+
+可選：`page`、`page_size`（1–100）、`status`、`plan`、`q`（id 精確或 `code_prefix` 模糊）。示例：`?page=1&page_size=50&status=unused&q=GPTD-AB12`。
+
+**兌換選卡（平台側）**：運營可配置默認渠道+卡頭；先判斷渠道是否開啟（關則換渠道），再優先指定卡頭；卡頭停用則用同渠道其餘卡頭；無卡則開卡。Open API 發碼跟隨平台默認偏好。
+
+CDK 狀態包括 `unused`、`reserved`、`consumed`、`frozen`、`disabled`；訂單成功後從 `reserved` 變為 `consumed`。列表不返回完整明文碼。
 
 #### 6.16.7 GPT 直充錯誤處理
 
