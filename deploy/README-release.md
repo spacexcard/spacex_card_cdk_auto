@@ -8,14 +8,14 @@
 ## 本地构建
 
 ```bash
-./scripts/build-release-bundle.sh 1.2.0
+./scripts/build-release-bundle.sh 1.2.3
 ```
 
 ## 发布到 GitHub
 
 ```bash
-git tag v1.2.0 && git push origin v1.2.0
-gh release create v1.2.0 cdk-bundle-linux-amd64.tgz cdk-bundle-linux-amd64.tgz.sha256 --generate-notes
+git tag v1.2.3 && git push origin v1.2.3
+gh release create v1.2.3 cdk-bundle-linux-amd64.tgz cdk-bundle-linux-amd64.tgz.sha256 --generate-notes
 ```
 
 ## 启用 GitHub Actions（可选）
