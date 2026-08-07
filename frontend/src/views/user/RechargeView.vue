@@ -13,6 +13,8 @@
         </div>
       </div>
 
+      <RedeemModeTabs />
+
       <!-- redeem-flow v2: no public fee reference -->
       <!-- steps -->
       <div class="card mb-6">
@@ -203,6 +205,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import LanguageToggle from '../../components/LanguageToggle.vue'
 import ThemeToggle from '../../components/ThemeToggle.vue'
+import RedeemModeTabs from '../../components/RedeemModeTabs.vue'
 
 const { t } = useI18n({ useScope: 'global' })
 const steps = ['预览', '凭证', '兑换', '结果']

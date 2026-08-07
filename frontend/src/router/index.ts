@@ -46,6 +46,11 @@ const routes: RouteRecordRaw[] = [
     component: () => import('../views/user/RechargeView.vue'),
   },
   {
+    path: '/batch',
+    name: 'BatchRedeem',
+    component: () => import('../views/user/BatchRedeemView.vue'),
+  },
+  {
     path: '/history',
     name: 'History',
     component: () => import('../views/user/HistoryView.vue'),
