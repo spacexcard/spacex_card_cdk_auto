@@ -120,6 +120,10 @@
           {{ alreadySatisfiedHint }}
         </div>
 
+        <div v-if="account.subscriptionIsDelinquent === true" class="alert" style="background: var(--warn-soft, #fef3c7); color: var(--warn, #b45309); border-color: var(--warn, #d97706)">
+          该账号有未结清账单（欠费）。仍可兑换：卡台会先取消原订阅再重新开通，但成功率低于正常账号。
+        </div>
+
         <div v-if="error" class="alert alert-error">{{ error }}</div>
         <div class="flex gap-3">
           <button class="btn-secondary flex-1" @click="step = 2">上一步</button>
@@ -243,6 +247,7 @@ const account = ref({
   subscriptionActiveUntil: '',
   canPurchaseAt: '',
   subscriptionWillRenew: null as boolean | null,
+  subscriptionIsDelinquent: null as boolean | null,
   lastPayment: null as any,
   paymentMethod: null as any,
 })
@@ -529,6 +534,9 @@ function applyAccountFromPreflight(data: any) {
     canPurchaseAt: String(body.can_purchase_at || body.subscription_active_until || ''),
     subscriptionWillRenew:
       typeof body.subscription_will_renew === 'boolean' ? body.subscription_will_renew : null,
+    // 欠费只提示不拦截：卡台会先取消订阅再重开，多数可恢复
+    subscriptionIsDelinquent:
+      typeof body.subscription_is_delinquent === 'boolean' ? body.subscription_is_delinquent : null,
     lastPayment: body.last_payment || null,
     paymentMethod: body.payment_method || null,
   }
@@ -543,6 +551,7 @@ function clearAccount() {
     subscriptionActiveUntil: '',
     canPurchaseAt: '',
     subscriptionWillRenew: null,
+    subscriptionIsDelinquent: null,
     lastPayment: null,
     paymentMethod: null,
   }
