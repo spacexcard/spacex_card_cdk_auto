@@ -224,13 +224,13 @@ func runSeamlessUpdate(target, username string) {
 		s.Message = "校验包完整性…"
 		s.Progress = 58
 	})
-	if shaURL != "" {
-		if err := verifySHA256File(tgzPath, shaURL); err != nil {
-			// sha 可选：失败仅警告并继续（部分 release 可能未挂 checksum）
-			setUpdateState(func(s *updateState) {
-				s.Message = "sha256 校验跳过/失败: " + err.Error() + "，继续解压…"
-			})
-		}
+	if shaURL == "" {
+		failUpdate("缺少 sha256 校验文件，已中止更新（禁止无完整性校验的远程更新）")
+		return
+	}
+	if err := verifySHA256File(tgzPath, shaURL); err != nil {
+		failUpdate("sha256 校验失败，已中止更新: " + err.Error())
+		return
 	}
 
 	setUpdateState(func(s *updateState) {

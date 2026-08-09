@@ -49,13 +49,67 @@
             </p>
           </div>
 
+          <div>
+            <label class="block text-sm font-medium text-ink mb-1.5">{{ t('batch.credMode') }}</label>
+            <div class="flex gap-2">
+              <button
+                type="button"
+                class="btn-secondary !py-1.5 flex-1"
+                :class="{ 'ring-2': credMode === 'session' }"
+                @click="credMode = 'session'"
+              >
+                {{ t('batch.modeSession') }}
+              </button>
+              <button
+                type="button"
+                class="btn-secondary !py-1.5 flex-1"
+                :class="{ 'ring-2': credMode === 'mailbox' }"
+                @click="credMode = 'mailbox'"
+              >
+                {{ t('batch.modeMailbox') }}
+              </button>
+            </div>
+          </div>
+
           <ExcelImportBlock
+            v-if="credMode === 'session'"
             :session-pool="sessionPool"
             :import-msg="importMsg"
             :importing="importing"
             @pick="onPickFile"
             @clear="clearSessionPool"
           />
+
+          <div v-else class="space-y-1.5">
+            <label class="block text-sm font-medium text-ink">{{ t('batch.mailboxLabel') }}</label>
+            <textarea
+              v-model="mailboxText"
+              rows="6"
+              class="input mono text-sm min-h-[120px]"
+              :placeholder="t('batch.mailboxPlaceholder')"
+            />
+            <p class="text-xs text-muted">
+              {{ t('batch.mailboxRecognized', { n: parsedMailboxes.length }) }}
+            </p>
+            <input
+              ref="mailboxFileRef"
+              type="file"
+              accept=".xlsx,.xls,.csv,.txt"
+              class="hidden"
+              @change="onPickMailboxFile"
+            />
+            <button
+              type="button"
+              class="w-full py-2.5 rounded-xl border border-dashed text-sm font-medium disabled:opacity-40"
+              style="border-color: color-mix(in srgb, var(--primary) 45%, var(--brd)); color: var(--primary)"
+              :disabled="importing"
+              @click="mailboxFileRef?.click()"
+            >
+              {{ importing ? t('batch.importing') : t('batch.mailboxImportBtn') }}
+            </button>
+            <p v-if="importMsg" class="text-xs text-muted leading-relaxed">{{ importMsg }}</p>
+            <p class="text-[11px] text-subtle">{{ t('batch.mailboxHint') }}</p>
+          </div>
 
           <button
             type="button"
@@ -91,7 +145,7 @@
             </div>
           </div>
 
-          <div v-if="!verifying && pendingSessionItems.length > 0" class="rounded-xl border bd p-3">
+          <div v-if="!verifying && pendingSessionItems.length > 0 && credMode === 'session'" class="rounded-xl border bd p-3">
             <ExcelImportBlock
               :session-pool="sessionPool"
               :import-msg="importMsg"
@@ -99,6 +153,16 @@
               @pick="onPickFile"
               @clear="clearSessionPool"
             />
+          </div>
+          <div v-else-if="!verifying && pendingSessionItems.length > 0 && credMode === 'mailbox'" class="rounded-xl border bd p-3 space-y-2">
+            <label class="block text-sm font-medium text-ink">{{ t('batch.mailboxLabel') }}</label>
+            <textarea
+              v-model="mailboxText"
+              rows="4"
+              class="input mono text-sm"
+              :placeholder="t('batch.mailboxPlaceholder')"
+            />
+            <p class="text-xs text-muted">{{ t('batch.mailboxRecognized', { n: parsedMailboxes.length }) }}</p>
           </div>
 
           <div v-if="verifying" class="text-sm text-muted text-center py-4">
@@ -122,22 +186,42 @@
                 <span v-if="currentItem.planLabel" class="ml-1.5 text-muted">({{ currentItem.planLabel }})</span>
               </div>
             </div>
-            <p
-              v-if="currentExcelIdx >= 0 && sessionPool[currentExcelIdx]?.email"
-              class="text-xs text-muted"
-            >
-              {{ t('batch.willUseAccount') }}
-              <span class="font-mono ml-1 text-ink">{{ sessionPool[currentExcelIdx].email }}</span>
-            </p>
-            <textarea
-              ref="sessionBoxRef"
-              v-model="sessionInput"
-              rows="5"
-              class="input mono text-xs min-h-[100px]"
-              :placeholder="t('batch.sessionPlaceholder')"
-              :disabled="submitting || autoSubmitting"
-              @input="sessionError = ''"
-            />
+            <template v-if="credMode === 'session'">
+              <p
+                v-if="currentExcelIdx >= 0 && sessionPool[currentExcelIdx]?.email"
+                class="text-xs text-muted"
+              >
+                {{ t('batch.willUseAccount') }}
+                <span class="font-mono ml-1 text-ink">{{ sessionPool[currentExcelIdx].email }}</span>
+              </p>
+              <textarea
+                ref="sessionBoxRef"
+                v-model="sessionInput"
+                rows="5"
+                class="input mono text-xs min-h-[100px]"
+                :placeholder="t('batch.sessionPlaceholder')"
+                :disabled="submitting || autoSubmitting"
+                @input="sessionError = ''"
+              />
+            </template>
+            <template v-else>
+              <p
+                v-if="currentExcelIdx >= 0 && mailboxPool[currentExcelIdx]?.email"
+                class="text-xs text-muted"
+              >
+                {{ t('batch.willUseAccount') }}
+                <span class="font-mono ml-1 text-ink">{{ mailboxPool[currentExcelIdx].email }}</span>
+              </p>
+              <textarea
+                ref="sessionBoxRef"
+                v-model="sessionInput"
+                rows="3"
+                class="input mono text-xs min-h-[72px]"
+                :placeholder="t('batch.mailboxLinePlaceholder')"
+                :disabled="submitting || autoSubmitting"
+                @input="sessionError = ''"
+              />
+            </template>
             <p v-if="sessionError" class="text-xs text-err">{{ sessionError }}</p>
             <div class="flex flex-col gap-2">
               <button
@@ -149,7 +233,7 @@
                 {{ submitting ? t('batch.submitting') : t('batch.submitNext') }}
               </button>
               <button
-                v-if="sessionPool.length > 0"
+                v-if="credMode === 'session' ? sessionPool.length > 0 : mailboxPool.length > 0"
                 type="button"
                 class="btn-secondary w-full !border-0 text-white"
                 style="background: var(--good, #16a34a)"
@@ -159,11 +243,15 @@
                 {{
                   autoSubmitting
                     ? t('batch.autoSubmitting')
-                    : t('batch.autoSubmit', { n: sessionPool.length })
+                    : t('batch.autoSubmit', {
+                        n: credMode === 'session' ? sessionPool.length : mailboxPool.length,
+                      })
                 }}
               </button>
             </div>
-            <p class="text-[11px] text-muted text-center">{{ t('batch.pairHint') }}</p>
+            <p class="text-[11px] text-muted text-center">
+              {{ credMode === 'session' ? t('batch.pairHint') : t('batch.mailboxPairHint') }}
+            </p>
           </div>
 
           <div
@@ -208,10 +296,14 @@
                   </span>
                 </div>
                 <div
-                  v-if="it.progressMsg || it.verifyMsg || it.email || it.redemptionToken"
+                  v-if="it.progressMsg || it.verifyMsg || it.email || it.cardLastFour || it.redemptionToken"
                   class="pl-7 text-[11px] text-muted space-y-0.5"
                 >
                   <div v-if="it.email">{{ t('batch.account') }}：{{ it.email }}</div>
+                  <div v-if="it.cardLastFour">{{ t('batch.card') }}：•••• {{ it.cardLastFour }}</div>
+                  <div v-else-if="it.status === 'processing' || it.status === 'success'">
+                    {{ t('batch.card') }}：{{ t('batch.cardPending') }}
+                  </div>
                   <div v-if="it.redemptionToken" class="font-mono truncate">
                     token：{{ it.redemptionToken.slice(0, 18) }}…
                   </div>
@@ -263,8 +355,12 @@ import {
   extractCdkSession,
   mapPool,
   parseCdks,
+  parseMailboxLine,
+  parseMailboxLines,
+  parseMailboxesFromSheet,
   parseSessionsFromSheet,
   readWorkbookRows,
+  type ImportedMailbox,
   type ImportedSession,
 } from '../../lib/batch-session'
 
@@ -289,10 +385,18 @@ interface BatchItem {
   redemptionToken: string
   progressMsg: string
   email: string
+  cardLastFour: string
   accessToken: string
   gptPassword: string
   emailPassword: string
   error: string
+}
+
+function extractCardLastFour(order: any): string {
+  const last = String(order?.card_last_four || '').trim()
+  if (/^\d{4}$/.test(last)) return last
+  const n = String(order?.card_number || '').replace(/\D/g, '')
+  return n.length >= 4 ? n.slice(-4) : ''
 }
 
 const deviceId = (() => {
@@ -306,7 +410,9 @@ const deviceId = (() => {
 })()
 
 const phase = ref<'input' | 'run'>('input')
+const credMode = ref<'session' | 'mailbox'>('session')
 const cdkText = ref('')
+const mailboxText = ref('')
 const items = ref<BatchItem[]>([])
 const verifying = ref(false)
 const sessionInput = ref('')
@@ -314,9 +420,11 @@ const sessionError = ref('')
 const submitting = ref(false)
 const autoSubmitting = ref(false)
 const sessionPool = ref<ImportedSession[]>([])
+const mailboxPool = ref<ImportedMailbox[]>([])
 const importMsg = ref('')
 const importing = ref(false)
 const sessionBoxRef = ref<HTMLTextAreaElement | null>(null)
+const mailboxFileRef = ref<HTMLInputElement | null>(null)
 const lastFilledItemId = ref<string | null>(null)
 
 const pollTargets = ref<Record<string, { token: string; terminal: boolean }>>({})
@@ -324,6 +432,12 @@ let pollTimer: ReturnType<typeof setInterval> | null = null
 let pollInFlight = false
 
 const parsedCdks = computed(() => parseCdks(cdkText.value))
+const parsedMailboxes = computed(() => parseMailboxLines(mailboxText.value))
+
+watch(parsedMailboxes, (rows) => {
+  // 文本粘贴优先；Excel 导入写入 mailboxPool 后也会同步到 mailboxText
+  if (credMode.value === 'mailbox') mailboxPool.value = rows
+})
 
 const verifiedQueue = computed(() =>
   items.value.filter((i) => i.status !== 'pending_verify' && i.status !== 'verify_fail'),
@@ -446,11 +560,22 @@ async function pollBatch() {
           const message = String(
             order.message || order.user_message || data?.message || data?.user_message || '',
           )
+          const email = String(order.account_email || order.email || '').trim()
+          const cardLastFour = extractCardLastFour(order)
+          const meta: Partial<BatchItem> = {}
+          if (email) meta.email = email
+          if (cardLastFour) meta.cardLastFour = cardLastFour
           if (isSuccessStatus(st)) {
-            updateItem(id, { status: 'success', progressMsg: message || '开通完成', error: '' })
+            updateItem(id, {
+              ...meta,
+              status: 'success',
+              progressMsg: message || '开通完成',
+              error: '',
+            })
             pollTargets.value[id] = { ...target, terminal: true }
           } else if (isFailStatus(st)) {
             updateItem(id, {
+              ...meta,
               status: 'failed',
               progressMsg: message || '兑换失败',
               error: message || '失败',
@@ -458,6 +583,7 @@ async function pollBatch() {
             pollTargets.value[id] = { ...target, terminal: true }
           } else {
             updateItem(id, {
+              ...meta,
               status: 'processing',
               progressMsg: message || (st ? `处理中 · ${st}` : '处理中…'),
               error: '',
@@ -481,7 +607,18 @@ function startPoll(id: string, token: string) {
   }
 }
 
-function fillSessionFromPool(excelIdx: number) {
+function fillCredentialFromPool(excelIdx: number) {
+  if (credMode.value === 'mailbox') {
+    const pool = mailboxPool.value
+    if (!pool.length || excelIdx < 0 || excelIdx >= pool.length) {
+      sessionInput.value = ''
+      return
+    }
+    const m = pool[excelIdx]
+    sessionInput.value = `${m.email}----${m.password}`
+    sessionError.value = ''
+    return
+  }
   const pool = sessionPool.value
   if (!pool.length || excelIdx < 0 || excelIdx >= pool.length) {
     sessionInput.value = ''
@@ -497,7 +634,9 @@ watch(
     if (!id || currentExcelIdx.value < 0) return
     if (lastFilledItemId.value === id) return
     lastFilledItemId.value = id
-    if (sessionPool.value.length > 0) fillSessionFromPool(currentExcelIdx.value)
+    const hasPool =
+      credMode.value === 'mailbox' ? mailboxPool.value.length > 0 : sessionPool.value.length > 0
+    if (hasPool) fillCredentialFromPool(currentExcelIdx.value)
     else sessionInput.value = ''
     await nextTick()
     sessionBoxRef.value?.focus()
@@ -526,11 +665,54 @@ async function onPickFile(file: File | null) {
       (sessions[0]?.email ? `，如 ${sessions[0].email}` : '')
     lastFilledItemId.value = null
     if (phase.value === 'run' && currentExcelIdx.value >= 0) {
-      fillSessionFromPool(currentExcelIdx.value)
+      fillCredentialFromPool(currentExcelIdx.value)
     }
   } catch (e) {
     sessionPool.value = []
     importMsg.value = '读取 Excel 失败：' + (e instanceof Error ? e.message : '未知错误')
+  } finally {
+    importing.value = false
+  }
+}
+
+async function onPickMailboxFile(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0] ?? null
+  input.value = ''
+  if (!file) return
+  importing.value = true
+  importMsg.value = ''
+  try {
+    const name = (file.name || '').toLowerCase()
+    if (name.endsWith('.txt')) {
+      const text = await file.text()
+      const rows = parseMailboxLines(text)
+      if (!rows.length) {
+        importMsg.value = '未识别到邮箱密码行（支持 email----password）'
+        return
+      }
+      mailboxText.value = rows.map((r) => `${r.email}----${r.password}`).join('\n')
+      mailboxPool.value = rows
+      importMsg.value = `已从「${file.name}」识别 ${rows.length} 条邮箱密码`
+      return
+    }
+    const sheetRows = await readWorkbookRows(file)
+    const { mailboxes, mode, skippedDup } = parseMailboxesFromSheet(sheetRows)
+    if (!mailboxes.length) {
+      importMsg.value = '未识别到邮箱/密码列。请使用「邮箱,邮箱密码」或 email----password'
+      return
+    }
+    mailboxText.value = mailboxes.map((r) => `${r.email}----${r.password}`).join('\n')
+    mailboxPool.value = mailboxes
+    importMsg.value =
+      `已从「${file.name}」识别 ${mailboxes.length} 条邮箱密码（${mode}）` +
+      (skippedDup > 0 ? `，已去重跳过 ${skippedDup} 条` : '')
+    lastFilledItemId.value = null
+    if (phase.value === 'run' && currentExcelIdx.value >= 0) {
+      fillCredentialFromPool(currentExcelIdx.value)
+    }
+  } catch (err) {
+    importMsg.value = '读取失败：' + (err instanceof Error ? err.message : '未知错误')
   } finally {
     importing.value = false
   }
@@ -553,6 +735,9 @@ async function handleVerifyBatch() {
   sessionError.value = ''
   stopAllPolls()
   lastFilledItemId.value = null
+  if (credMode.value === 'mailbox') {
+    mailboxPool.value = parsedMailboxes.value
+  }
   const list: BatchItem[] = keys.map((k, i) => ({
     id: `${i}-${k}`,
     cardKey: k,
@@ -562,6 +747,7 @@ async function handleVerifyBatch() {
     redemptionToken: '',
     progressMsg: '',
     email: '',
+    cardLastFour: '',
     accessToken: '',
     gptPassword: '',
     emailPassword: '',
@@ -624,29 +810,61 @@ async function handleVerifyBatch() {
 
 async function submitOne(
   item: BatchItem,
-  sessionRaw: string,
-  imported?: ImportedSession,
+  credential:
+    | { mode: 'session'; session: string; imported?: ImportedSession }
+    | { mode: 'mailbox'; email: string; password: string },
 ): Promise<'ok' | 'fail'> {
-  const check = checkSessionForCdk(sessionRaw)
-  if (!check.ok) {
+  if (credential.mode === 'session') {
+    const check = checkSessionForCdk(credential.session)
+    if (!check.ok) {
+      updateItem(item.id, {
+        status: 'failed',
+        progressMsg: check.error,
+        error: check.error,
+      })
+      return 'fail'
+    }
+    const session = extractCdkSession(credential.session)
+    const imported = credential.imported
+    updateItem(item.id, {
+      status: 'submitting',
+      email: check.email || imported?.email || '',
+      accessToken: imported?.accessToken || accessTokenFromSession(credential.session),
+      gptPassword: imported?.gptPassword || '',
+      emailPassword: imported?.emailPassword || '',
+      progressMsg: '账号预检…',
+      error: '',
+    })
+    return runPreflightRedeem(item, { mode: 'session', session }, check.email || imported?.email || '')
+  }
+
+  const email = credential.email.trim()
+  const password = credential.password
+  if (!email.includes('@') || !password) {
     updateItem(item.id, {
       status: 'failed',
-      progressMsg: check.error,
-      error: check.error,
+      progressMsg: '邮箱或密码无效',
+      error: '邮箱或密码无效',
     })
     return 'fail'
   }
-  const session = extractCdkSession(sessionRaw)
   updateItem(item.id, {
     status: 'submitting',
-    email: check.email || imported?.email || '',
-    accessToken: imported?.accessToken || accessTokenFromSession(sessionRaw),
-    gptPassword: imported?.gptPassword || '',
-    emailPassword: imported?.emailPassword || '',
+    email,
+    emailPassword: password,
     progressMsg: '账号预检…',
     error: '',
   })
+  return runPreflightRedeem(item, { mode: 'mailbox', email, password }, email)
+}
 
+async function runPreflightRedeem(
+  item: BatchItem,
+  credential:
+    | { mode: 'session'; session: string }
+    | { mode: 'mailbox'; email: string; password: string },
+  fallbackEmail: string,
+): Promise<'ok' | 'fail'> {
   let redemptionToken = item.redemptionToken
   try {
     if (!redemptionToken) {
@@ -678,7 +896,7 @@ async function submitOne(
       body: JSON.stringify({
         code: item.cardKey,
         redemption_token: redemptionToken,
-        credential: { mode: 'session', session },
+        credential,
       }),
     })
     if (!r.ok || (data && typeof data.code === 'number' && data.code !== 0)) {
@@ -696,7 +914,7 @@ async function submitOne(
       })
       return 'fail'
     }
-    const email = String(body.email || body.account_email || check.email || imported?.email || '')
+    const email = String(body.email || body.account_email || fallbackEmail || '')
     updateItem(item.id, { email, progressMsg: '预检通过，提交兑换…' })
 
     const client_request_id = `batch-${deviceId.slice(0, 8)}-${Date.now()}-${item.id}`
@@ -714,10 +932,14 @@ async function submitOne(
     const message = String(
       order.message || order.user_message || redeem.data?.message || redeem.data?.msg || '',
     )
+    const cardLastFour = extractCardLastFour(order)
+    const orderEmail = String(order.account_email || order.email || email).trim()
 
     if (!redeem.r.ok && redeem.r.status !== 202) {
       updateItem(item.id, {
         status: 'failed',
+        email: orderEmail || email,
+        cardLastFour: cardLastFour || item.cardLastFour,
         progressMsg: message || redeem.data?.error || '兑换被拒绝',
         error: message || redeem.data?.error || '兑换被拒绝',
       })
@@ -725,10 +947,18 @@ async function submitOne(
     }
 
     if (isSuccessStatus(st)) {
-      updateItem(item.id, { status: 'success', progressMsg: message || '开通完成', error: '' })
+      updateItem(item.id, {
+        status: 'success',
+        email: orderEmail || email,
+        cardLastFour,
+        progressMsg: message || '开通完成',
+        error: '',
+      })
     } else if (isFailStatus(st)) {
       updateItem(item.id, {
         status: 'failed',
+        email: orderEmail || email,
+        cardLastFour,
         progressMsg: message || '兑换失败',
         error: message || '失败',
       })
@@ -736,6 +966,8 @@ async function submitOne(
     } else {
       updateItem(item.id, {
         status: 'processing',
+        email: orderEmail || email,
+        cardLastFour,
         progressMsg: message || '处理中…',
         error: '',
       })
@@ -754,7 +986,27 @@ async function submitOne(
 
 async function handleSubmitSession() {
   if (!currentItem.value || submitting.value || autoSubmitting.value) return
-  const check = checkSessionForCdk(sessionInput.value)
+  const raw = sessionInput.value.trim()
+  if (credMode.value === 'mailbox') {
+    const parsed = parseMailboxLine(raw)
+    if (!parsed) {
+      sessionError.value = '请填写 email----password（或 email:password）'
+      return
+    }
+    sessionError.value = ''
+    submitting.value = true
+    const item = currentItem.value
+    sessionInput.value = ''
+    lastFilledItemId.value = null
+    try {
+      await submitOne(item, { mode: 'mailbox', email: parsed.email, password: parsed.password })
+    } finally {
+      submitting.value = false
+    }
+    return
+  }
+
+  const check = checkSessionForCdk(raw)
   if (!check.ok) {
     sessionError.value = check.error
     return
@@ -762,17 +1014,16 @@ async function handleSubmitSession() {
   sessionError.value = ''
   submitting.value = true
   const item = currentItem.value
-  const raw = sessionInput.value
   sessionInput.value = ''
   lastFilledItemId.value = null
   try {
     const imported =
       currentExcelIdx.value >= 0 ? sessionPool.value[currentExcelIdx.value] : undefined
-    await submitOne(
-      item,
-      raw,
-      imported?.session.trim() === raw.trim() ? imported : undefined,
-    )
+    await submitOne(item, {
+      mode: 'session',
+      session: raw,
+      imported: imported?.session.trim() === raw ? imported : undefined,
+    })
   } finally {
     submitting.value = false
   }
@@ -780,11 +1031,6 @@ async function handleSubmitSession() {
 
 async function handleAutoSubmitAll() {
   if (autoSubmitting.value || submitting.value || verifying.value) return
-  const pool = sessionPool.value
-  if (!pool.length) {
-    sessionError.value = '请先导入 Excel Session'
-    return
-  }
   const verifiedSnap = items.value.filter(
     (i) => i.status !== 'pending_verify' && i.status !== 'verify_fail',
   )
@@ -793,6 +1039,49 @@ async function handleAutoSubmitAll() {
   )
   if (!pendingSnap.length) {
     sessionError.value = '没有待提交的卡密'
+    return
+  }
+
+  if (credMode.value === 'mailbox') {
+    const pool = mailboxPool.value.length ? mailboxPool.value : parsedMailboxes.value
+    if (!pool.length) {
+      sessionError.value = '请先粘贴或导入邮箱密码列表'
+      return
+    }
+    autoSubmitting.value = true
+    sessionError.value = ''
+    const verifiedPositions = new Map(verifiedSnap.map((item, index) => [item.id, index]))
+    let cursor = 0
+    const workers = Array.from(
+      { length: Math.min(AUTO_SUBMIT_CONCURRENCY, pendingSnap.length) },
+      async () => {
+        while (true) {
+          const itemIndex = cursor++
+          if (itemIndex >= pendingSnap.length) return
+          const item = pendingSnap[itemIndex]
+          const excelIdx = verifiedPositions.get(item.id) ?? -1
+          const mb = excelIdx >= 0 ? pool[excelIdx] : undefined
+          if (!mb) {
+            updateItem(item.id, {
+              status: 'failed',
+              progressMsg: `邮箱列表只有 ${pool.length} 条，第 ${excelIdx + 1} 张无对应`,
+              error: '邮箱密码不足',
+            })
+            continue
+          }
+          await submitOne(item, { mode: 'mailbox', email: mb.email, password: mb.password })
+        }
+      },
+    )
+    await Promise.all(workers)
+    sessionInput.value = ''
+    autoSubmitting.value = false
+    return
+  }
+
+  const pool = sessionPool.value
+  if (!pool.length) {
+    sessionError.value = '请先导入 Excel Session'
     return
   }
   autoSubmitting.value = true
@@ -816,7 +1105,7 @@ async function handleAutoSubmitAll() {
           })
           continue
         }
-        await submitOne(item, sess.session, sess)
+        await submitOne(item, { mode: 'session', session: sess.session, imported: sess })
       }
     },
   )
@@ -843,6 +1132,10 @@ function resetAll() {
   phase.value = 'input'
   items.value = []
   cdkText.value = ''
+  mailboxText.value = ''
+  mailboxPool.value = []
+  sessionPool.value = []
+  importMsg.value = ''
   sessionInput.value = ''
   sessionError.value = ''
   autoSubmitting.value = false

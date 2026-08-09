@@ -16,6 +16,159 @@ export interface ImportedSession {
   accountId?: string
 }
 
+export interface ImportedMailbox {
+  email: string
+  password: string
+  source: string
+}
+
+/** 单行邮箱密码：email----password / email:password / email,password / email password */
+export function parseMailboxLine(line: string): ImportedMailbox | null {
+  const raw = String(line || '')
+    .replace(/^\uFEFF/, '')
+    .trim()
+  if (!raw || raw.startsWith('#')) return null
+  let email = ''
+  let password = ''
+  if (raw.includes('----')) {
+    const [e, ...rest] = raw.split('----')
+    email = e.trim()
+    password = rest.join('----').trim()
+  } else if (raw.includes(',')) {
+    const [e, ...rest] = raw.split(',')
+    email = e.trim()
+    password = rest.join(',').trim()
+  } else if (raw.includes(';')) {
+    const [e, ...rest] = raw.split(';')
+    email = e.trim()
+    password = rest.join(';').trim()
+  } else if (raw.includes(':') && raw.indexOf('@') < raw.indexOf(':')) {
+    const idx = raw.indexOf(':')
+    email = raw.slice(0, idx).trim()
+    password = raw.slice(idx + 1).trim()
+  } else {
+    const m = raw.match(/^(\S+@\S+)\s+(.+)$/)
+    if (!m) return null
+    email = m[1].trim()
+    password = m[2].trim()
+  }
+  email = email.replace(/^["']|["']$/g, '')
+  password = password.replace(/^["']|["']$/g, '')
+  if (!email.includes('@') || !password) return null
+  return { email, password, source: 'line' }
+}
+
+export function parseMailboxLines(raw: string): ImportedMailbox[] {
+  const seen = new Set<string>()
+  const out: ImportedMailbox[] = []
+  for (const line of String(raw || '').split(/\r?\n/)) {
+    const row = parseMailboxLine(line)
+    if (!row) continue
+    const key = row.email.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(row)
+  }
+  return out
+}
+
+/** Excel/CSV：识别邮箱 + 邮箱密码列（可不含 session） */
+export function parseMailboxesFromSheet(rows: unknown[][]): {
+  mailboxes: ImportedMailbox[]
+  mode: string
+  skippedDup: number
+} {
+  if (!rows.length) return { mailboxes: [], mode: 'empty', skippedDup: 0 }
+  const header = (rows[0] || []).map((c) =>
+    String(c ?? '')
+      .replace(/^\uFEFF/, '')
+      .trim()
+      .toLowerCase(),
+  )
+  const isHeader =
+    header.some((h) => /邮箱|email|mail|密码|password|账号/.test(h)) && rows.length > 1
+  let emailCol = -1
+  let passCol = -1
+  let mode = 'scan'
+  if (isHeader) {
+    emailCol = header.findIndex(
+      (h) => /^(邮箱|email|e-mail|mail|账号邮箱)$/.test(h) || (h.includes('邮箱') && !h.includes('密码')),
+    )
+    passCol = header.findIndex((h) =>
+      /^(邮箱密码|email.?password|mail.?password|邮箱口令|password|密码)$/.test(h),
+    )
+    if (passCol < 0) {
+      passCol = header.findIndex((h) => h.includes('密码') || h.includes('password'))
+    }
+    mode = `header:${header[emailCol] || emailCol}/${header[passCol] || passCol}`
+  }
+  const dataStart = isHeader ? 1 : 0
+  const colCount = Math.max(...rows.map((r) => (r ? r.length : 0)), 0)
+  if (emailCol < 0 || passCol < 0) {
+    // 无表头：优先两列 email / password；或整行 ---- 分隔
+    for (let c = 0; c < colCount; c++) {
+      let hits = 0
+      for (let r = dataStart; r < Math.min(rows.length, dataStart + 20); r++) {
+        const v = String((rows[r] || [])[c] ?? '').trim()
+        if (v.includes('@') && v.includes('.') && v.length < 120) hits++
+      }
+      if (hits >= 1 && emailCol < 0) emailCol = c
+    }
+    if (emailCol >= 0 && passCol < 0) {
+      passCol = emailCol + 1 < colCount ? emailCol + 1 : -1
+    }
+    mode = 'content-scan'
+  }
+
+  const mailboxes: ImportedMailbox[] = []
+  const seen = new Set<string>()
+  let skippedDup = 0
+  for (let r = dataStart; r < rows.length; r++) {
+    const row = rows[r] || []
+    // 单列整行：email----password
+    if (emailCol >= 0 && passCol < 0) {
+      const parsed = parseMailboxLine(String(row[emailCol] ?? ''))
+      if (!parsed) continue
+      const key = parsed.email.toLowerCase()
+      if (seen.has(key)) {
+        skippedDup++
+        continue
+      }
+      seen.add(key)
+      mailboxes.push({ ...parsed, source: `row${r + 1}` })
+      continue
+    }
+    if (emailCol < 0 || passCol < 0) {
+      // 尝试任意单元格整行解析
+      let parsed: ImportedMailbox | null = null
+      for (const cell of row) {
+        parsed = parseMailboxLine(String(cell ?? ''))
+        if (parsed) break
+      }
+      if (!parsed) continue
+      const key = parsed.email.toLowerCase()
+      if (seen.has(key)) {
+        skippedDup++
+        continue
+      }
+      seen.add(key)
+      mailboxes.push({ ...parsed, source: `row${r + 1}` })
+      continue
+    }
+    const email = String(row[emailCol] ?? '').trim()
+    const password = String(row[passCol] ?? '').trim()
+    if (!email.includes('@') || !password) continue
+    const key = email.toLowerCase()
+    if (seen.has(key)) {
+      skippedDup++
+      continue
+    }
+    seen.add(key)
+    mailboxes.push({ email, password, source: `row${r + 1}` })
+  }
+  return { mailboxes, mode, skippedDup }
+}
+
 function normalizeAccessToken(raw: string): string {
   return raw.trim().replace(/^Bearer\s+/i, '').replace(/\s+/g, '')
 }

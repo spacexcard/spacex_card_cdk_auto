@@ -144,6 +144,20 @@
           </span>
         </div>
 
+        <div class="rounded-xl bg-soft p-3 text-sm space-y-2">
+          <div class="flex justify-between gap-3 items-center">
+            <span class="text-muted shrink-0">兑换账号</span>
+            <span class="mono text-ink text-right break-all">{{ displayResultEmail || '—' }}</span>
+          </div>
+          <div class="flex justify-between gap-3 items-center">
+            <span class="text-muted shrink-0">银行卡</span>
+            <span class="mono text-ink">
+              <template v-if="resultCardLastFour">•••• {{ resultCardLastFour }}</template>
+              <template v-else><span class="text-muted">开卡后显示尾号</span></template>
+            </span>
+          </div>
+        </div>
+
         <div v-if="resultMessage" class="rounded-xl bg-soft p-3 text-sm text-ink">
           {{ resultMessage }}
         </div>
@@ -235,10 +249,13 @@ const account = ref({
 const resultStatus = ref('')
 const resultStage = ref('')
 const resultMessage = ref('')
+const resultEmail = ref('')
+const resultCardLastFour = ref('')
 const resultBody = ref<any>(null)
 const timeline = ref<any[]>([])
 const polling = ref(false)
 let pollTimer: any = null
+const displayResultEmail = computed(() => resultEmail.value || account.value.email || '')
 
 const PROGRESS_KEY = 'cdk_redeem_progress_v1'
 const nowTick = ref(Date.now())
@@ -266,6 +283,8 @@ function saveProgress() {
       resultStatus: resultStatus.value,
       resultStage: resultStage.value,
       resultMessage: resultMessage.value,
+      resultEmail: resultEmail.value,
+      resultCardLastFour: resultCardLastFour.value,
       resultBody: resultBody.value,
       timeline: timeline.value,
       savedAt: Date.now(),
@@ -309,6 +328,8 @@ function loadProgress(): boolean {
     if (p.resultStatus) resultStatus.value = String(p.resultStatus)
     if (p.resultStage) resultStage.value = String(p.resultStage)
     if (p.resultMessage) resultMessage.value = String(p.resultMessage)
+    if (p.resultEmail) resultEmail.value = String(p.resultEmail)
+    if (p.resultCardLastFour) resultCardLastFour.value = String(p.resultCardLastFour)
     if (p.resultBody) resultBody.value = p.resultBody
     if (Array.isArray(p.timeline)) timeline.value = p.timeline
     const s = Number(p.step) || 1
@@ -607,9 +628,16 @@ const progressSteps = computed(() => {
   return keys.map((k, i) => ({ ...k, active: i <= idx }))
 })
 
+function extractCardLastFour(order: any): string {
+  const last = String(order?.card_last_four || '').trim()
+  if (/^\d{4}$/.test(last)) return last
+  const n = String(order?.card_number || '').replace(/\D/g, '')
+  return n.length >= 4 ? n.slice(-4) : ''
+}
+
 function applyResultPayload(data: any) {
   resultBody.value = data
-  // 卡台公开结构：{ order: {status,stage,message}, events: [] }
+  // 卡台公开结构：{ order: {status,stage,message,account_email,card_last_four}, events: [] }
   // 兼容顶层扁平 / data 包裹
   const order = data?.order || data?.data?.order || data?.data || data || {}
   const st =
@@ -628,6 +656,10 @@ function applyResultPayload(data: any) {
   resultStatus.value = st
   resultStage.value = stage
   resultMessage.value = message
+  const email = String(order.account_email || order.email || data?.account_email || '').trim()
+  if (email) resultEmail.value = email
+  const last4 = extractCardLastFour(order)
+  if (last4) resultCardLastFour.value = last4
 
   let events = data?.events || data?.data?.events || order.events || []
   if (!Array.isArray(events)) events = []
@@ -869,6 +901,8 @@ function resetAll() {
   resultStatus.value = ''
   resultStage.value = ''
   resultMessage.value = ''
+  resultEmail.value = ''
+  resultCardLastFour.value = ''
   timeline.value = []
   polling.value = false
 }
