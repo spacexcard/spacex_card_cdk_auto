@@ -71,6 +71,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'integration', name: 'CardIntegration', component: () => import('../views/admin/CardIntegration.vue') },
       { path: 'audit', name: 'AuditLogs', component: () => import('../views/admin/AuditLogs.vue') },
       { path: 'webhooks', name: 'Webhooks', component: () => import('../views/admin/WebhookEvents.vue') },
+      { path: 'card-selection', name: 'CardSelectionConfig', component: () => import('../views/admin/CardSelectionConfig.vue') },
       // 旧路径兼容
       { path: 'accounts', redirect: OPS_BASE },
       { path: 'proxies', redirect: OPS_BASE },

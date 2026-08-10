@@ -162,6 +162,27 @@ func createTables() error {
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_cdk_bind_token ON cdk_session_bindings(redemption_token)`,
+
+		// 自动选卡权重规则（管理员可配置优先级）
+		`CREATE TABLE IF NOT EXISTS card_selection_rules (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			sort_order INTEGER NOT NULL DEFAULT 0,
+			plan_key TEXT NOT NULL,
+			display_name TEXT NOT NULL,
+			bin_prefix TEXT DEFAULT '',
+			channel TEXT DEFAULT '',
+			enabled INTEGER DEFAULT 1,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+
+		// 卡台产品状态缓存（每3分钟后台同步）
+		`CREATE TABLE IF NOT EXISTS plan_status_cache (
+			plan_key TEXT PRIMARY KEY,
+			label TEXT DEFAULT '',
+			online INTEGER DEFAULT 1,
+			service_fee_usd_minor INTEGER DEFAULT 0,
+			synced_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
 	}
 
 	for _, query := range queries {
@@ -175,6 +196,9 @@ func createTables() error {
 		return err
 	}
 	if err := migrateLegacyCDKCodes(); err != nil {
+		return err
+	}
+	if err := migrateDefaultCardSelectionRules(); err != nil {
 		return err
 	}
 	if err := ensureDefaultAdmin(); err != nil {
@@ -812,6 +836,191 @@ func LookupCardplatformCDKCode(upstreamID int64, prefix string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// ---- 自动选卡权重配置 ----
+
+// CardSelectionRule 一条选卡规则（按 sort_order 排列优先级）。
+type CardSelectionRule struct {
+	ID          int64  `json:"id"`
+	SortOrder   int    `json:"sort_order"`
+	PlanKey     string `json:"plan_key"`
+	DisplayName string `json:"display_name"`
+	BinPrefix   string `json:"bin_prefix"`
+	Channel     string `json:"channel"`
+	Enabled     bool   `json:"enabled"`
+	CreatedAt   string `json:"created_at"`
+}
+
+// PlanStatusCache 卡台产品状态缓存条目。
+type PlanStatusCache struct {
+	PlanKey            string  `json:"plan_key"`
+	Label              string  `json:"label"`
+	Online             bool    `json:"online"`
+	ServiceFeeUsdMinor int64   `json:"service_fee_usd_minor"`
+	ServiceFeeUSD      float64 `json:"service_fee_usd"`
+	SyncedAt           string  `json:"synced_at"`
+}
+
+// GetCardSelectionRules 按 sort_order 返回所有选卡规则。
+func GetCardSelectionRules() ([]CardSelectionRule, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not ready")
+	}
+	rows, err := DB.Query(`
+		SELECT id, sort_order, plan_key, display_name,
+		       COALESCE(bin_prefix,''), COALESCE(channel,''),
+		       enabled, COALESCE(created_at,'')
+		FROM card_selection_rules ORDER BY sort_order ASC, id ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CardSelectionRule
+	for rows.Next() {
+		var r CardSelectionRule
+		var enabled int
+		if err := rows.Scan(&r.ID, &r.SortOrder, &r.PlanKey, &r.DisplayName,
+			&r.BinPrefix, &r.Channel, &enabled, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		r.Enabled = enabled == 1
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// SetCardSelectionRules 在事务内整体替换选卡规则列表。
+func SetCardSelectionRules(rules []CardSelectionRule) error {
+	if DB == nil {
+		return fmt.Errorf("db not ready")
+	}
+	tx, err := DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM card_selection_rules`); err != nil {
+		return err
+	}
+	for i, r := range rules {
+		sortOrder := r.SortOrder
+		if sortOrder == 0 {
+			sortOrder = i + 1
+		}
+		enabled := 0
+		if r.Enabled {
+			enabled = 1
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO card_selection_rules (sort_order, plan_key, display_name, bin_prefix, channel, enabled)
+			VALUES (?, ?, ?, ?, ?, ?)
+		`, sortOrder, strings.TrimSpace(r.PlanKey), strings.TrimSpace(r.DisplayName),
+			strings.TrimSpace(r.BinPrefix), strings.TrimSpace(r.Channel), enabled); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// GetPlanStatusCache 返回所有产品状态缓存（slice，供列表展示）。
+func GetPlanStatusCache() ([]PlanStatusCache, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not ready")
+	}
+	rows, err := DB.Query(`
+		SELECT plan_key, COALESCE(label,''), online,
+		       COALESCE(service_fee_usd_minor,0), COALESCE(synced_at,'')
+		FROM plan_status_cache ORDER BY plan_key
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PlanStatusCache
+	for rows.Next() {
+		var p PlanStatusCache
+		var online int
+		if err := rows.Scan(&p.PlanKey, &p.Label, &online,
+			&p.ServiceFeeUsdMinor, &p.SyncedAt); err != nil {
+			return nil, err
+		}
+		p.Online = online == 1
+		p.ServiceFeeUSD = float64(p.ServiceFeeUsdMinor) / 100.0
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// GetPlanStatusCacheMap 返回 plan_key → PlanStatusCache 的 map，方便 O(1) 查找。
+func GetPlanStatusCacheMap() (map[string]PlanStatusCache, error) {
+	list, err := GetPlanStatusCache()
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]PlanStatusCache, len(list))
+	for _, p := range list {
+		m[p.PlanKey] = p
+	}
+	return m, nil
+}
+
+// UpsertPlanStatus 插入或更新一条产品状态缓存。
+func UpsertPlanStatus(planKey, label string, online bool, feeMinor int64) error {
+	if DB == nil {
+		return fmt.Errorf("db not ready")
+	}
+	onlineInt := 0
+	if online {
+		onlineInt = 1
+	}
+	_, err := DB.Exec(`
+		INSERT INTO plan_status_cache (plan_key, label, online, service_fee_usd_minor, synced_at)
+		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(plan_key) DO UPDATE SET
+			label = excluded.label,
+			online = excluded.online,
+			service_fee_usd_minor = excluded.service_fee_usd_minor,
+			synced_at = excluded.synced_at
+	`, strings.TrimSpace(planKey), label, onlineInt, feeMinor)
+	return err
+}
+
+// migrateDefaultCardSelectionRules 首次启动时写入默认选卡优先级。
+func migrateDefaultCardSelectionRules() error {
+	if DB == nil {
+		return nil
+	}
+	var count int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM card_selection_rules`).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil // 已有用户配置，不覆盖
+	}
+	defaults := []struct {
+		sortOrder   int
+		planKey     string
+		displayName string
+		binPrefix   string
+		channel     string
+	}{
+		{1, "537872", "渠道1 537872", "537872", "ch1"},
+		{2, "525962", "渠道4 525962", "525962", "ch4"},
+		{3, "usmabo1", "渠道3 usmabo1", "usmabo1", "ch3"},
+		{4, "plus", "渠道1 所有Visa", "", "ch1"},
+	}
+	for _, d := range defaults {
+		if _, err := DB.Exec(`
+			INSERT INTO card_selection_rules (sort_order, plan_key, display_name, bin_prefix, channel, enabled)
+			VALUES (?, ?, ?, ?, ?, 1)
+		`, d.sortOrder, d.planKey, d.displayName, d.binPrefix, d.channel); err != nil {
+			log.Printf("migrateDefaultCardSelectionRules: %v", err)
+		}
+	}
+	log.Println("✓ 已写入默认选卡优先级规则")
+	return nil
 }
 
 func Close() error {

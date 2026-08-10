@@ -13,6 +13,7 @@ import (
 	"github.com/tuzi/cdk-recharge-system/internal/config"
 	"github.com/tuzi/cdk-recharge-system/internal/db"
 	"github.com/tuzi/cdk-recharge-system/internal/handler"
+	"github.com/tuzi/cdk-recharge-system/internal/plansync"
 )
 
 type Server struct {
@@ -47,6 +48,9 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 
 	// Setup routes
 	setupRoutes(engine)
+
+	// 启动卡台产品状态后台同步（每3分钟）
+	plansync.Start(ctx)
 
 	return &Server{
 		engine: engine,
@@ -196,6 +200,12 @@ func setupRoutes(r *gin.Engine) {
 			// 站点设置（品牌/皮肤/卡台密钥保险箱）
 			admin.GET("/settings", handler.AdminGetSettings)
 			admin.PUT("/settings", handler.AdminPutSettings)
+
+			// 自动选卡权重配置
+			admin.GET("/card-selection/rules", handler.AdminGetCardSelectionRules)
+			admin.PUT("/card-selection/rules", handler.AdminPutCardSelectionRules)
+			admin.GET("/card-selection/plan-status", handler.AdminGetPlanStatus)
+			admin.POST("/card-selection/sync", handler.AdminSyncPlanStatus)
 		}
 	}
 
