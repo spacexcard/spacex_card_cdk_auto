@@ -82,15 +82,22 @@ func AdminPutCardSelectionRules(c *gin.Context) {
 
 // AdminGetPlanStatus GET /api/v1/admin/card-selection/plan-status
 // 返回产品状态缓存（含最后同步时间 + 预计下次同步时间）
+// AdminGetPlanStatus GET /api/v1/admin/card-selection/plan-status
+// 返回逻辑套餐状态缓存 + 实体产品缓存（含最后同步时间）
 func AdminGetPlanStatus(c *gin.Context) {
 	statuses, err := db.GetPlanStatusCache()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	products, _ := db.GetCardProducts()
 	lastSync := latestSyncTime(statuses)
+	if lastSync == "" {
+		lastSync = latestProductSyncTime(products)
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"statuses":  statuses,
+		"products":  products,
 		"last_sync": lastSync,
 		"next_sync": nextSyncIn(lastSync),
 	})
@@ -104,21 +111,32 @@ func AdminSyncPlanStatus(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "card_api_key not configured"})
 		return
 	}
-	n, err := plansync.SyncNow(c.Request.Context())
+	r, err := plansync.SyncNow(c.Request.Context())
 	if err != nil {
 		writeCardErr(c, err)
 		return
 	}
-	auditAdmin(c, "sync_plan_status", fmt.Sprintf("synced=%d", n))
+	auditAdmin(c, "sync_plan_status", fmt.Sprintf("plans=%d products=%d", r.Plans, r.Products))
 	AdminGetPlanStatus(c)
 }
 
-// latestSyncTime 从状态列表中取最新的 synced_at。
+// latestSyncTime 从套餐状态列表中取最新的 synced_at。
 func latestSyncTime(statuses []db.PlanStatusCache) string {
 	var latest string
 	for _, s := range statuses {
 		if latest == "" || s.SyncedAt > latest {
 			latest = s.SyncedAt
+		}
+	}
+	return latest
+}
+
+// latestProductSyncTime 从产品列表中取最新的 synced_at。
+func latestProductSyncTime(products []db.CardProductCache) string {
+	var latest string
+	for _, p := range products {
+		if latest == "" || p.SyncedAt > latest {
+			latest = p.SyncedAt
 		}
 	}
 	return latest

@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -175,12 +176,28 @@ func createTables() error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 
-		// 卡台产品状态缓存（每3分钟后台同步）
+		// 卡台产品状态缓存（每3分钟后台同步，plan_key 用于逻辑套餐）
 		`CREATE TABLE IF NOT EXISTS plan_status_cache (
 			plan_key TEXT PRIMARY KEY,
 			label TEXT DEFAULT '',
 			online INTEGER DEFAULT 1,
 			service_fee_usd_minor INTEGER DEFAULT 0,
+			synced_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+
+		// 卡台实体产品缓存（/openapi/v1/products 同步，product_code 唯一）
+		`CREATE TABLE IF NOT EXISTS card_product_cache (
+			product_code TEXT PRIMARY KEY,
+			issuer TEXT DEFAULT '',
+			bin TEXT DEFAULT '',
+			network TEXT DEFAULT '',
+			issuing_area TEXT DEFAULT '',
+			scene TEXT DEFAULT '',
+			card_group TEXT DEFAULT '',
+			description TEXT DEFAULT '',
+			bin_heads TEXT DEFAULT '',
+			enabled INTEGER DEFAULT 1,
+			suspended_at TEXT DEFAULT '',
 			synced_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 	}
@@ -987,6 +1004,90 @@ func UpsertPlanStatus(planKey, label string, online bool, feeMinor int64) error 
 	return err
 }
 
+// CardProductCache 卡台实体产品缓存条目。
+type CardProductCache struct {
+	ProductCode string   `json:"product_code"`
+	Issuer      string   `json:"issuer"`
+	BIN         string   `json:"bin"`
+	Network     string   `json:"network"`
+	IssuingArea string   `json:"issuing_area"`
+	Scene       string   `json:"scene"`
+	CardGroup   string   `json:"card_group"`
+	Description string   `json:"description"`
+	BinHeads    []string `json:"bin_heads"` // 反序列化自 JSON 存储
+	Enabled     bool     `json:"enabled"`
+	SuspendedAt string   `json:"suspended_at"`
+	SyncedAt    string   `json:"synced_at"`
+}
+
+// UpsertCardProduct 插入或更新一条产品缓存。
+func UpsertCardProduct(p CardProductCache) error {
+	if DB == nil {
+		return fmt.Errorf("db not ready")
+	}
+	onlineInt := 0
+	if p.Enabled {
+		onlineInt = 1
+	}
+	binHeadsJSON, _ := json.Marshal(p.BinHeads)
+	_, err := DB.Exec(`
+		INSERT INTO card_product_cache
+			(product_code, issuer, bin, network, issuing_area, scene, card_group,
+			 description, bin_heads, enabled, suspended_at, synced_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(product_code) DO UPDATE SET
+			issuer = excluded.issuer,
+			bin = excluded.bin,
+			network = excluded.network,
+			issuing_area = excluded.issuing_area,
+			scene = excluded.scene,
+			card_group = excluded.card_group,
+			description = excluded.description,
+			bin_heads = excluded.bin_heads,
+			enabled = excluded.enabled,
+			suspended_at = excluded.suspended_at,
+			synced_at = excluded.synced_at
+	`, p.ProductCode, p.Issuer, p.BIN, p.Network, p.IssuingArea, p.Scene, p.CardGroup,
+		p.Description, string(binHeadsJSON), onlineInt, p.SuspendedAt)
+	return err
+}
+
+// GetCardProducts 返回所有产品缓存（按 product_code 排序）。
+func GetCardProducts() ([]CardProductCache, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not ready")
+	}
+	rows, err := DB.Query(`
+		SELECT product_code, COALESCE(issuer,''), COALESCE(bin,''), COALESCE(network,''),
+		       COALESCE(issuing_area,''), COALESCE(scene,''), COALESCE(card_group,''),
+		       COALESCE(description,''), COALESCE(bin_heads,'[]'), enabled,
+		       COALESCE(suspended_at,''), COALESCE(synced_at,'')
+		FROM card_product_cache ORDER BY product_code
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CardProductCache
+	for rows.Next() {
+		var p CardProductCache
+		var enabled int
+		var binHeadsJSON string
+		if err := rows.Scan(&p.ProductCode, &p.Issuer, &p.BIN, &p.Network,
+			&p.IssuingArea, &p.Scene, &p.CardGroup, &p.Description,
+			&binHeadsJSON, &enabled, &p.SuspendedAt, &p.SyncedAt); err != nil {
+			return nil, err
+		}
+		p.Enabled = enabled == 1
+		_ = json.Unmarshal([]byte(binHeadsJSON), &p.BinHeads)
+		if p.BinHeads == nil {
+			p.BinHeads = []string{}
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // migrateDefaultCardSelectionRules 首次启动时写入默认选卡优先级。
 func migrateDefaultCardSelectionRules() error {
 	if DB == nil {
@@ -1006,10 +1107,10 @@ func migrateDefaultCardSelectionRules() error {
 		binPrefix   string
 		channel     string
 	}{
-		{1, "537872", "渠道1 537872", "537872", "ch1"},
-		{2, "525962", "渠道4 525962", "525962", "ch4"},
-		{3, "usmabo1", "渠道3 usmabo1", "usmabo1", "ch3"},
-		{4, "plus", "渠道1 所有Visa", "", "ch1"},
+		// 只写入美卡；香港卡（PP5450RC/PP5583RC）不进默认优先级
+		{1, "P5378OX", "渠道1 · P5378OX · 537872 · 美国通用卡", "537872", "ch1"},
+		{2, "PP5259RC", "渠道4 · PP5259RC · 525962/555671/544015 · 美国随机", "525962", "ch4"},
+		{3, "USMAB01", "渠道3 · USMAB01 · 555671/525962/544015 · AI订阅通用", "USMAB01", "ch3"},
 	}
 	for _, d := range defaults {
 		if _, err := DB.Exec(`

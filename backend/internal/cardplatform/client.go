@@ -582,3 +582,41 @@ func (c *Client) Result(ctx context.Context, token, device string) (int, json.Ra
 func MinorToUSD(minor int64) float64 {
 	return float64(minor) / 100.0
 }
+
+// ProductInfo 卡台产品（/openapi/v1/products 返回条目）
+type ProductInfo struct {
+	ID           int64    `json:"id"`
+	ProductCode  string   `json:"product_code"`
+	Issuer       string   `json:"issuer"`
+	BIN          string   `json:"bin"`
+	Network      string   `json:"network"`
+	IssuingArea  string   `json:"issuing_area"`
+	Scene        string   `json:"scene"`
+	CardGroup    string   `json:"card_group"`
+	Enabled      bool     `json:"enabled"`
+	SuspendedAt  string   `json:"suspended_at"` // null → ""
+	Description  string   `json:"description"`
+	BinHeads     []string `json:"bin_heads"`
+}
+
+// GetProducts GET /openapi/v1/products — 拉取所有可用卡产品列表
+func (c *Client) GetProducts(ctx context.Context) ([]ProductInfo, error) {
+	data, err := c.doOpenAPI(ctx, http.MethodGet, "/products?page=1&page_size=200", nil, "")
+	if err != nil {
+		return nil, err
+	}
+	// data 是 data 字段内容：可能是数组，也可能是 {list:[...],total:N}
+	var items []ProductInfo
+	if err := json.Unmarshal(data, &items); err == nil {
+		return items, nil
+	}
+	// 尝试 {list: [...]}
+	var wrapped struct {
+		List  []ProductInfo `json:"list"`
+		Total int           `json:"total"`
+	}
+	if err := json.Unmarshal(data, &wrapped); err != nil {
+		return nil, err
+	}
+	return wrapped.List, nil
+}
