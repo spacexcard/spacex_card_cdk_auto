@@ -232,6 +232,48 @@ func CardPlatformStoreCDKCodes(c *gin.Context) {
 	})
 }
 
+// CardPlatformListStoredCDKs GET /api/v1/admin/cardplatform/cdks/stored
+// 只读本站已存完整码（随时复制/导出；不依赖卡台列表分页）。
+// query: plan= / q= / limit= / format=json|txt
+func CardPlatformListStoredCDKs(c *gin.Context) {
+	plan := strings.TrimSpace(c.Query("plan"))
+	q := strings.TrimSpace(c.Query("q"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "5000"))
+	format := strings.ToLower(strings.TrimSpace(c.DefaultQuery("format", "json")))
+	list, err := db.ListCardplatformStoredCDKCodes(plan, q, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if format == "txt" || format == "text" || format == "plain" {
+		var b strings.Builder
+		for _, it := range list {
+			if strings.TrimSpace(it.Code) == "" {
+				continue
+			}
+			b.WriteString(it.Code)
+			b.WriteByte('\n')
+		}
+		c.Header("Content-Disposition", `attachment; filename="cdk-full-codes.txt"`)
+		c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(b.String()))
+		return
+	}
+	// 默认 JSON：便于前端多选复制
+	out := make([]gin.H, 0, len(list))
+	for _, it := range list {
+		out = append(out, gin.H{
+			"id": it.UpstreamID, "code": it.Code, "full_code": it.Code,
+			"code_prefix": it.CodePrefix, "plan": it.Plan,
+			"fee_amount_minor": it.FeeAmountMinor, "created_at": it.CreatedAt,
+			"has_full_code": true, "stored": true,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"list": out, "total": len(out), "full_code_in_store": db.CountCardplatformCDKCodes(),
+		"server_stored": true,
+	})
+}
+
 // CardPlatformListCDKs GET /api/v1/admin/cardplatform/cdks?page=&page_size=&q=&status=&plan=
 func CardPlatformListCDKs(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))

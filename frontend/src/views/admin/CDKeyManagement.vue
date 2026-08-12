@@ -148,30 +148,42 @@
       <section class="space-y-3">
         <div class="card flex flex-wrap items-center justify-between gap-3 !py-3">
           <div>
-            <h2 class="text-lg font-semibold text-ink">卡台 CDK 列表</h2>
+            <h2 class="text-lg font-semibold text-ink">CDK 列表</h2>
             <p class="text-xs text-muted">
-              完整码存服务器（发码时写入）；点击码即可复制 · 共 {{ total }} 条
-              <span v-if="storeStats.fullInStore != null"> · 本站已存 {{ storeStats.fullInStore }} 条完整码</span>
-              <span v-if="storeStats.fullOnPage != null"> · 本页完整 {{ storeStats.fullOnPage }}</span>
+              完整码随时可选 / 复制 / 导出 · 共 {{ total }} 条
+              <span v-if="storeStats.fullInStore != null"> · 本站已存完整码 {{ storeStats.fullInStore }}</span>
+              <span v-if="listMode === 'upstream' && storeStats.fullOnPage != null"> · 本页完整 {{ storeStats.fullOnPage }}</span>
             </p>
           </div>
-          <div class="flex flex-wrap gap-2">
+          <div class="flex flex-wrap gap-2 items-center">
+            <el-radio-group v-model="listMode" size="small" @change="onListModeChange">
+              <el-radio-button value="stored">本站完整码库</el-radio-button>
+              <el-radio-button value="upstream">卡台状态列表</el-radio-button>
+            </el-radio-group>
             <el-button size="small" :loading="syncingCache" @click="syncLocalCacheToServer" title="把浏览器里旧的完整码缓存上传到服务器">
-              同步本机缓存到服务器
+              同步本机缓存
             </el-button>
             <el-button :loading="loadingList" @click="loadList">刷新</el-button>
           </div>
         </div>
+
         <div class="card flex flex-wrap items-center gap-2 !py-3">
           <el-input
             v-model="listQ"
             clearable
             class="!w-[240px]"
-            placeholder="模糊搜索：ID / 码前缀"
+            :placeholder="listMode === 'stored' ? '搜索完整码 / ID / 前缀' : '模糊搜索：ID / 码前缀'"
             @keyup.enter="searchList"
             @clear="searchList"
           />
-          <el-select v-model="listStatus" clearable placeholder="状态" class="!w-[140px]" @change="searchList">
+          <el-select
+            v-if="listMode === 'upstream'"
+            v-model="listStatus"
+            clearable
+            placeholder="状态"
+            class="!w-[140px]"
+            @change="searchList"
+          >
             <el-option v-for="s in statusOptions" :key="s" :label="s" :value="s" />
           </el-select>
           <el-select v-model="listPlan" clearable placeholder="套餐" class="!w-[140px]" @change="searchList">
@@ -181,16 +193,54 @@
           </el-select>
           <el-button type="primary" :loading="loadingList" @click="searchList">查询</el-button>
         </div>
+
+        <!-- 选择 / 复制 / 导出 -->
+        <div class="card flex flex-wrap items-center gap-2 !py-3">
+          <span class="text-sm text-muted">
+            已选 <b class="text-ink">{{ selectedRows.length }}</b>
+            · 可选完整码 <b class="text-ink">{{ fullSelectableCount }}</b>
+          </span>
+          <el-button size="small" :disabled="!selectedFullCodes.length" type="primary" @click="copySelectedFull">
+            复制选中完整码 ({{ selectedFullCodes.length }})
+          </el-button>
+          <el-button size="small" :disabled="!selectedFullCodes.length" @click="exportSelectedFull">
+            导出选中 .txt
+          </el-button>
+          <el-button size="small" :disabled="!pageFullCodes.length" @click="copyPageFull">
+            复制本页完整码 ({{ pageFullCodes.length }})
+          </el-button>
+          <el-button size="small" type="success" :loading="exportingAll" :disabled="!storeStats.fullInStore" @click="exportAllStored">
+            导出本站全部完整码
+          </el-button>
+          <el-button size="small" :loading="exportingAll" :disabled="!storeStats.fullInStore" @click="copyAllStored">
+            复制本站全部完整码
+          </el-button>
+          <el-button size="small" text :disabled="!selectedRows.length" @click="clearSelection">清空选择</el-button>
+        </div>
+
         <div v-if="listError" class="alert alert-error">{{ listError }}</div>
+        <div v-if="listMode === 'stored' && !loadingList && !displayRows.length" class="alert alert-info">
+          本站尚未存入完整码。在本页发码后会自动写入；或点「同步本机缓存」把浏览器里的历史码上传。
+        </div>
         <div class="card overflow-hidden !p-0">
-          <el-table :data="displayRows" v-loading="loadingList" size="small" stripe empty-text="暂无数据">
+          <el-table
+            ref="tableRef"
+            :data="displayRows"
+            v-loading="loadingList"
+            size="small"
+            stripe
+            empty-text="暂无数据"
+            row-key="rowKey"
+            @selection-change="onSelectionChange"
+          >
+            <el-table-column type="selection" width="44" :selectable="rowSelectable" reserve-selection />
             <el-table-column prop="id" label="ID" width="72" />
-            <el-table-column label="卡密" min-width="220">
+            <el-table-column label="卡密" min-width="260">
               <template #default="{ row }">
                 <button
                   type="button"
                   class="code-cell"
-                  :title="row.fullCode ? '点击复制完整码' : '仅有前缀，请到发码结果区复制完整码'"
+                  :title="row.fullCode ? '点击复制完整码' : '仅有前缀（请切换到「本站完整码库」或重新发码）'"
                   @click="copyRowCode(row)"
                 >
                   <span class="mono break-all code-cell__text" :class="row.fullCode ? 'is-full' : 'is-prefix'">
@@ -207,9 +257,9 @@
             <el-table-column prop="plan" label="套餐" width="100">
               <template #default="{ row }">{{ planLabel(row.plan) }}</template>
             </el-table-column>
-            <el-table-column prop="status" label="状态" width="100">
+            <el-table-column v-if="listMode === 'upstream'" prop="status" label="状态" width="100">
               <template #default="{ row }">
-                <el-tag size="small" :type="statusType(row.status)">{{ row.status }}</el-tag>
+                <el-tag size="small" :type="statusType(row.status)">{{ row.status || '—' }}</el-tag>
               </template>
             </el-table-column>
             <el-table-column label="服务费" width="90">
@@ -218,11 +268,26 @@
               </template>
             </el-table-column>
             <el-table-column prop="created_at" label="时间" min-width="140" />
+            <el-table-column label="操作" width="100" fixed="right">
+              <template #default="{ row }">
+                <el-button
+                  size="small"
+                  type="primary"
+                  link
+                  :disabled="!row.fullCode"
+                  @click="copyRowCode(row)"
+                >
+                  复制
+                </el-button>
+              </template>
+            </el-table-column>
           </el-table>
         </div>
         <div class="flex flex-wrap items-center justify-between gap-3 text-sm text-muted">
-          <span>第 {{ page }} 页 · 共 {{ total }} 条</span>
+          <span v-if="listMode === 'upstream'">第 {{ page }} 页 · 共 {{ total }} 条</span>
+          <span v-else>本站完整码库 · 共 {{ total }} 条</span>
           <el-pagination
+            v-if="listMode === 'upstream'"
             background
             layout="total, sizes, prev, pager, next"
             :total="total"
@@ -256,6 +321,11 @@ type CodeCacheEntry = { code: string; plan?: string; prefix?: string; at?: numbe
 const codeCache = ref<Record<string, CodeCacheEntry>>({})
 const storeStats = reactive({ fullOnPage: null as number | null, fullInStore: null as number | null })
 const syncingCache = ref(false)
+const exportingAll = ref(false)
+/** stored = 本站完整码库（默认可复制导出）；upstream = 卡台状态列表 */
+const listMode = ref<'stored' | 'upstream'>('stored')
+const selectedRows = ref<any[]>([])
+const tableRef = ref<any>(null)
 
 const plans = ref<Record<string, any>>({})
 const pricingVersion = ref<number | null>(null)
@@ -306,17 +376,136 @@ const canIssue = computed(() =>
   configured.value && form.funding_confirmed && form.count >= 1 && form.count <= 50 && !issuing.value,
 )
 
-/** 列表行：合并本机完整码缓存 */
+/** 列表行：合并服务器 full_code + 本机兜底缓存 */
 const displayRows = computed(() =>
-  rows.value.map((row) => {
+  rows.value.map((row, idx) => {
     const full = lookupFullCode(row)
+    const id = row.id != null ? String(row.id) : `i${idx}`
     return {
       ...row,
+      rowKey: `${listMode.value}-${id}-${String(row.code_prefix || row.code || idx)}`,
       fullCode: full,
       displayCode: full || String(row.code_prefix || row.code || '').trim() || '',
     }
   }),
 )
+
+const pageFullCodes = computed(() =>
+  displayRows.value.map((r) => String(r.fullCode || '').trim()).filter((c) => isFullCode(c)),
+)
+const selectedFullCodes = computed(() =>
+  selectedRows.value.map((r) => String(r.fullCode || lookupFullCode(r) || '').trim()).filter((c) => isFullCode(c)),
+)
+const fullSelectableCount = computed(() => displayRows.value.filter((r) => !!r.fullCode).length)
+
+function rowSelectable(row: any) {
+  return !!row?.fullCode
+}
+function onSelectionChange(rowsSel: any[]) {
+  selectedRows.value = Array.isArray(rowsSel) ? rowsSel : []
+}
+function clearSelection() {
+  selectedRows.value = []
+  tableRef.value?.clearSelection?.()
+}
+function onListModeChange() {
+  page.value = 1
+  clearSelection()
+  loadList()
+}
+
+function downloadText(filename: string, text: string) {
+  const blob = new Blob([text.endsWith('\n') ? text : text + '\n'], { type: 'text/plain;charset=utf-8' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+
+async function copyCodes(codes: string[], label: string) {
+  if (!codes.length) {
+    dialog.toast('没有可复制的完整码', 'warn')
+    return
+  }
+  const ok = await copyToClipboard(codes.join('\n'))
+  dialog.toast(ok ? `已复制 ${codes.length} 张${label}` : '复制失败，请导出 .txt 后打开', ok ? 'ok' : 'err')
+}
+
+async function copySelectedFull() {
+  await copyCodes(selectedFullCodes.value, '完整码（选中）')
+}
+async function copyPageFull() {
+  await copyCodes(pageFullCodes.value, '完整码（本页）')
+}
+function exportSelectedFull() {
+  const codes = selectedFullCodes.value
+  if (!codes.length) {
+    dialog.toast('请先勾选带「完整」标签的行', 'warn')
+    return
+  }
+  downloadText(`cdk-selected-${codes.length}-${Date.now()}.txt`, codes.join('\n'))
+  dialog.toast(`已导出 ${codes.length} 张`, 'ok')
+}
+
+async function fetchAllStoredCodes(): Promise<string[]> {
+  const qs = new URLSearchParams({ limit: '10000' })
+  if (listPlan.value) qs.set('plan', listPlan.value)
+  if (listQ.value.trim()) qs.set('q', listQ.value.trim())
+  const r = await authFetch(`/api/v1/admin/cardplatform/cdks/stored?${qs.toString()}`)
+  const d = await r.json().catch(() => ({}))
+  if (!r.ok) throw new Error(d.error || d.msg || '拉取本站完整码失败')
+  const list = Array.isArray(d.list) ? d.list : []
+  const codes: string[] = []
+  const seen = new Set<string>()
+  for (const it of list) {
+    const c = extractFullCode(it) || String(it?.code || '').trim()
+    if (!isFullCode(c) || seen.has(c)) continue
+    seen.add(c)
+    codes.push(c)
+  }
+  if (d.full_code_in_store != null) storeStats.fullInStore = Number(d.full_code_in_store)
+  return codes
+}
+
+async function copyAllStored() {
+  exportingAll.value = true
+  try {
+    const codes = await fetchAllStoredCodes()
+    await copyCodes(codes, '完整码（本站全部）')
+  } catch (e: any) {
+    dialog.toast(e?.message || '复制失败', 'err')
+  } finally {
+    exportingAll.value = false
+  }
+}
+
+async function exportAllStored() {
+  exportingAll.value = true
+  try {
+    // 优先走后端 txt 附件（更省内存）
+    const qs = new URLSearchParams({ format: 'txt', limit: '10000' })
+    if (listPlan.value) qs.set('plan', listPlan.value)
+    if (listQ.value.trim()) qs.set('q', listQ.value.trim())
+    const r = await authFetch(`/api/v1/admin/cardplatform/cdks/stored?${qs.toString()}`)
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}))
+      throw new Error(d.error || d.msg || '导出失败')
+    }
+    const text = await r.text()
+    const lines = text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+    if (!lines.length) {
+      dialog.toast('本站没有可导出的完整码', 'warn')
+      return
+    }
+    downloadText(`cdk-stored-all-${lines.length}-${Date.now()}.txt`, lines.join('\n'))
+    dialog.toast(`已导出 ${lines.length} 张完整码`, 'ok')
+  } catch (e: any) {
+    dialog.toast(e?.message || '导出失败', 'err')
+  } finally {
+    exportingAll.value = false
+  }
+}
 
 function feeDefault(k: string) {
   return k === 'plus' ? 1 : k === 'pro_5x' ? 5 : 10
@@ -646,7 +835,29 @@ function searchList() {
 async function loadList() {
   loadingList.value = true
   listError.value = ''
+  clearSelection()
   try {
+    if (listMode.value === 'stored') {
+      const qs = new URLSearchParams({ limit: '5000' })
+      if (listQ.value.trim()) qs.set('q', listQ.value.trim())
+      if (listPlan.value) qs.set('plan', listPlan.value)
+      const r = await authFetch(`/api/v1/admin/cardplatform/cdks/stored?${qs.toString()}`)
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) {
+        listError.value = d.error || d.msg || '加载本站完整码失败'
+        rows.value = []
+        total.value = 0
+        return
+      }
+      const list = Array.isArray(d.list) ? d.list : []
+      rememberIssued(list, form.plan)
+      rows.value = list
+      total.value = d.total ?? list.length
+      storeStats.fullOnPage = list.filter((it: any) => isFullCode(extractFullCode(it) || it.code)).length
+      storeStats.fullInStore = d.full_code_in_store != null ? Number(d.full_code_in_store) : list.length
+      return
+    }
+
     const qs = new URLSearchParams({
       page: String(page.value),
       page_size: String(pageSize.value),
@@ -663,7 +874,6 @@ async function loadList() {
       return
     }
     const list = Array.isArray(d.list) ? d.list : []
-    // 服务器补全的完整码同时写入本机兜底
     rememberIssued(list, form.plan)
     rows.value = list
     total.value = d.total || 0

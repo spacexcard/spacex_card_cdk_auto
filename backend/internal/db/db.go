@@ -847,6 +847,66 @@ func CountCardplatformCDKCodes() int {
 	return n
 }
 
+// StoredCDKCode 本站已存的完整码行。
+type StoredCDKCode struct {
+	UpstreamID     int64  `json:"id"`
+	Code           string `json:"code"`
+	CodePrefix     string `json:"code_prefix"`
+	Plan           string `json:"plan"`
+	FeeAmountMinor int64  `json:"fee_amount_minor"`
+	CreatedAt      string `json:"created_at"`
+}
+
+// ListCardplatformStoredCDKCodes 列出本站 SQLite 中的完整码（可按 plan / q 过滤）。
+// limit<=0 时默认 5000，硬顶 10000。
+func ListCardplatformStoredCDKCodes(plan, q string, limit int) ([]StoredCDKCode, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not init")
+	}
+	if limit <= 0 {
+		limit = 5000
+	}
+	if limit > 10000 {
+		limit = 10000
+	}
+	plan = strings.TrimSpace(plan)
+	q = strings.TrimSpace(q)
+	sql := `
+		SELECT COALESCE(upstream_id,0), code, COALESCE(code_prefix,''), COALESCE(plan,''),
+		       COALESCE(fee_amount_minor,0), COALESCE(created_at,'')
+		FROM cardplatform_cdk_codes WHERE 1=1`
+	args := []any{}
+	if plan != "" {
+		sql += ` AND plan = ?`
+		args = append(args, plan)
+	}
+	if q != "" {
+		sql += ` AND (code LIKE ? OR code_prefix LIKE ? OR CAST(upstream_id AS TEXT) = ?)`
+		like := "%" + q + "%"
+		args = append(args, like, like, q)
+	}
+	sql += ` ORDER BY created_at DESC, rowid DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := DB.Query(sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]StoredCDKCode, 0, 64)
+	for rows.Next() {
+		var it StoredCDKCode
+		if err := rows.Scan(&it.UpstreamID, &it.Code, &it.CodePrefix, &it.Plan, &it.FeeAmountMinor, &it.CreatedAt); err != nil {
+			return nil, err
+		}
+		it.Code = strings.TrimSpace(it.Code)
+		if it.Code == "" {
+			continue
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
 // LookupCardplatformCDKCode 按上游 id 或 prefix 取完整码。
 func LookupCardplatformCDKCode(upstreamID int64, prefix string) (string, bool) {
 	if DB == nil {
