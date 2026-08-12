@@ -79,15 +79,23 @@ func doSync(ctx context.Context) (SyncResult, error) {
 	}
 
 	// 2. 同步实体产品（product_code + BIN + enabled）
+	// 卡台 /products 只返回当前可开（enabled=true）的产品；下架产品不会再出现。
 	products, err := cli.GetProducts(ctx)
 	if err != nil {
-		// 产品接口失败不阻断套餐同步结果
+		// 产品接口失败不阻断套餐同步结果，也绝不把全表标下线（避免短暂 5xx 误杀）
 		log.Printf("[plan-sync] GetProducts error: %v", err)
 		return res, nil
 	}
+	present := make(map[string]bool, len(products))
 	for _, p := range products {
+		code := p.ProductCode
+		if code == "" {
+			continue
+		}
+		// OpenAPI /products 只返回当前可开卡产品 → 列表内一律视为在线
+		present[code] = true
 		cp := db.CardProductCache{
-			ProductCode: p.ProductCode,
+			ProductCode: code,
 			Issuer:      p.Issuer,
 			BIN:         p.BIN,
 			Network:     p.Network,
@@ -96,14 +104,20 @@ func doSync(ctx context.Context) (SyncResult, error) {
 			CardGroup:   p.CardGroup,
 			Description: p.Description,
 			BinHeads:    p.BinHeads,
-			Enabled:     p.Enabled,
+			Enabled:     true,
 			SuspendedAt: p.SuspendedAt,
 		}
 		if err := db.UpsertCardProduct(cp); err != nil {
-			log.Printf("[plan-sync] upsert product %s: %v", p.ProductCode, err)
+			log.Printf("[plan-sync] upsert product %s: %v", code, err)
 		} else {
 			res.Products++
 		}
+	}
+	// 3. 本次未返回的历史缓存 → 标已下线（如全部 VISA 已从卡台下架）
+	if off, err := db.MarkCardProductsOfflineExcept(present); err != nil {
+		log.Printf("[plan-sync] mark offline: %v", err)
+	} else if off > 0 {
+		log.Printf("[plan-sync] marked %d products offline (not in openable list)", off)
 	}
 	return res, nil
 }

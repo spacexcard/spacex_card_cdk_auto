@@ -7,12 +7,19 @@
         <div>
           <h2 class="text-xl font-bold text-ink">产品在线状态</h2>
           <p class="text-sm text-muted mt-1">
-            每 3 分钟自动同步 · 共 <strong>{{ products.length }}</strong> 个产品
+            与卡台「可开卡产品」对齐 · 每 3 分钟同步 · 在线
+            <strong>{{ onlineCount }}</strong> / 共 {{ products.length }}
             <span v-if="lastSync" class="ml-2 text-subtle">上次：{{ lastSync }}</span>
             <span v-if="nextSync && nextSync !== '—'" class="ml-1 text-subtle">· {{ nextSync }}后</span>
           </p>
+          <p class="text-xs text-subtle mt-1">
+            说明：此处是<strong>开卡产品</strong>（渠道/BIN），不是 CDK 套餐（Plus/Pro）。卡台下架的卡段会显示已下线；CDK 能否购买看套餐是否开启。
+          </p>
         </div>
-        <el-button :loading="syncing" type="primary" plain @click="doSync">立即同步</el-button>
+        <div class="flex gap-2 items-center">
+          <el-checkbox v-model="showOffline">显示已下线</el-checkbox>
+          <el-button :loading="syncing" type="primary" plain @click="doSync">立即同步</el-button>
+        </div>
       </div>
 
       <div v-if="products.length === 0" class="text-sm text-muted py-6 text-center">
@@ -21,7 +28,7 @@
 
       <div v-else class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         <div
-          v-for="p in products"
+          v-for="p in visibleProducts"
           :key="p.product_code"
           class="prod-card"
           :class="isProductOnline(p) ? 'prod-online' : 'prod-offline'"
@@ -183,6 +190,7 @@ const nextSync = ref('')
 const saving = ref(false)
 const syncing = ref(false)
 const showAddDialog = ref(false)
+const showOffline = ref(false)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
 const ISSUER_MAP: Record<string, string> = {
@@ -194,8 +202,15 @@ function issuerLabel(issuer: string) {
 }
 
 function isProductOnline(p: CardProduct) {
-  return p.enabled && !p.suspended_at
+  return !!(p && p.enabled && !p.suspended_at)
 }
+
+const onlineCount = computed(() => products.value.filter(isProductOnline).length)
+const visibleProducts = computed(() => {
+  const list = products.value
+  if (showOffline.value) return list
+  return list.filter(isProductOnline)
+})
 
 function binDisplay(p: CardProduct) {
   // bin 字段是完整卡号前缀（可能8位，如 43612080）

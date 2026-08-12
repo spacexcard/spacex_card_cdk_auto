@@ -1127,7 +1127,54 @@ func UpsertCardProduct(p CardProductCache) error {
 	return err
 }
 
-// GetCardProducts 返回所有产品缓存（按 product_code 排序）。
+// MarkCardProductsOfflineExcept 将不在 present 集合中的缓存产品标为已下线。
+// 卡台 OpenAPI /products 只返回 enabled=true 的可开产品；下架后不再出现在列表，
+// 若不在此收口，历史 VISA 等会永久显示「在线」。
+func MarkCardProductsOfflineExcept(present map[string]bool) (int, error) {
+	if DB == nil {
+		return 0, fmt.Errorf("db not ready")
+	}
+	if present == nil {
+		present = map[string]bool{}
+	}
+	rows, err := DB.Query(`SELECT product_code FROM card_product_cache WHERE enabled = 1`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	var stale []string
+	for rows.Next() {
+		var code string
+		if err := rows.Scan(&code); err != nil {
+			return 0, err
+		}
+		code = strings.TrimSpace(code)
+		if code == "" || present[code] {
+			continue
+		}
+		stale = append(stale, code)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, code := range stale {
+		res, err := DB.Exec(`
+			UPDATE card_product_cache
+			SET enabled = 0, synced_at = CURRENT_TIMESTAMP
+			WHERE product_code = ? AND enabled = 1
+		`, code)
+		if err != nil {
+			return n, err
+		}
+		if aff, _ := res.RowsAffected(); aff > 0 {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// GetCardProducts 返回所有产品缓存（在线优先，再按 product_code）。
 func GetCardProducts() ([]CardProductCache, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not ready")
@@ -1137,7 +1184,8 @@ func GetCardProducts() ([]CardProductCache, error) {
 		       COALESCE(issuing_area,''), COALESCE(scene,''), COALESCE(card_group,''),
 		       COALESCE(description,''), COALESCE(bin_heads,'[]'), enabled,
 		       COALESCE(suspended_at,''), COALESCE(synced_at,'')
-		FROM card_product_cache ORDER BY product_code
+		FROM card_product_cache
+		ORDER BY enabled DESC, network, product_code
 	`)
 	if err != nil {
 		return nil, err
