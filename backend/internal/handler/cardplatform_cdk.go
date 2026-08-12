@@ -234,21 +234,52 @@ func CardPlatformStoreCDKCodes(c *gin.Context) {
 
 // CardPlatformListStoredCDKs GET /api/v1/admin/cardplatform/cdks/stored
 // 只读本站已存完整码（随时复制/导出；不依赖卡台列表分页）。
-// query: plan= / q= / limit= / format=json|txt
+// query: plan= / q= / status= / limit= / format=json|txt
 func CardPlatformListStoredCDKs(c *gin.Context) {
 	plan := strings.TrimSpace(c.Query("plan"))
 	q := strings.TrimSpace(c.Query("q"))
+	status := strings.TrimSpace(c.Query("status"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "5000"))
 	format := strings.ToLower(strings.TrimSpace(c.DefaultQuery("format", "json")))
-	list, err := db.ListCardplatformStoredCDKCodes(plan, q, limit)
+	// 先不过滤 status，拉全量缓存后再用卡台实时状态过滤（本地 status 可能滞后）
+	list, err := db.ListCardplatformStoredCDKCodesFilter(plan, q, "", limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	// 用卡台列表补齐/刷新 status（best-effort，失败仍返回本地缓存）
+	statusMap := map[int64]string{}
+	cli := cardplatform.NewFromSettings()
+	for page := 1; page <= 30; page++ {
+		res, err := cli.ListCDKs(c.Request.Context(), page, 100)
+		if err != nil || res == nil || len(res.List) == 0 {
+			break
+		}
+		for _, it := range res.List {
+			statusMap[it.ID] = it.Status
+			if it.ID > 0 && it.Status != "" {
+				_ = db.UpdateCardplatformCDKStatus(it.ID, it.Status)
+			}
+		}
+		if len(res.List) < 100 {
+			break
+		}
+	}
+	wantStatus := strings.ToLower(status)
 	if format == "txt" || format == "text" || format == "plain" {
 		var b strings.Builder
 		for _, it := range list {
 			if strings.TrimSpace(it.Code) == "" {
+				continue
+			}
+			st := it.Status
+			if s, ok := statusMap[it.UpstreamID]; ok && s != "" {
+				st = s
+			}
+			if st == "" {
+				st = "unused"
+			}
+			if wantStatus != "" && st != wantStatus {
 				continue
 			}
 			b.WriteString(it.Code)
@@ -258,12 +289,21 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 		c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(b.String()))
 		return
 	}
-	// 默认 JSON：便于前端多选复制
 	out := make([]gin.H, 0, len(list))
 	for _, it := range list {
+		st := it.Status
+		if s, ok := statusMap[it.UpstreamID]; ok && s != "" {
+			st = s
+		}
+		if st == "" {
+			st = "unused"
+		}
+		if wantStatus != "" && st != wantStatus {
+			continue
+		}
 		out = append(out, gin.H{
 			"id": it.UpstreamID, "code": it.Code, "full_code": it.Code,
-			"code_prefix": it.CodePrefix, "plan": it.Plan,
+			"code_prefix": it.CodePrefix, "plan": it.Plan, "status": st,
 			"fee_amount_minor": it.FeeAmountMinor, "created_at": it.CreatedAt,
 			"has_full_code": true, "stored": true,
 		})
@@ -286,10 +326,30 @@ func CardPlatformDisableCDK(c *gin.Context) {
 		writeCardErr(c, err)
 		return
 	}
+	_ = db.UpdateCardplatformCDKStatus(id, "disabled")
 	u, _ := c.Get("username")
 	username, _ := u.(string)
 	db.WriteAudit(username, "cardplatform_disable_cdk", "id="+strconv.FormatInt(id, 10), c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{"ok": true, "id": id, "status": "disabled"})
+}
+
+// CardPlatformEnableCDK POST /api/v1/admin/cardplatform/cdks/:id/enable — 解除禁用
+func CardPlatformEnableCDK(c *gin.Context) {
+	id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	cli := cardplatform.NewFromSettings()
+	if err := cli.EnableCDK(c.Request.Context(), id); err != nil {
+		writeCardErr(c, err)
+		return
+	}
+	_ = db.UpdateCardplatformCDKStatus(id, "unused")
+	u, _ := c.Get("username")
+	username, _ := u.(string)
+	db.WriteAudit(username, "cardplatform_enable_cdk", "id="+strconv.FormatInt(id, 10), c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"ok": true, "id": id, "status": "unused"})
 }
 
 // CardPlatformBatchDisableCDKs POST /api/v1/admin/cardplatform/cdks/batch-disable
@@ -312,6 +372,9 @@ func CardPlatformBatchDisableCDKs(c *gin.Context) {
 		writeCardErr(c, err)
 		return
 	}
+	for _, id := range res.Disabled {
+		_ = db.UpdateCardplatformCDKStatus(id, "disabled")
+	}
 	u, _ := c.Get("username")
 	username, _ := u.(string)
 	db.WriteAudit(username, "cardplatform_batch_disable_cdk",
@@ -320,6 +383,39 @@ func CardPlatformBatchDisableCDKs(c *gin.Context) {
 		"ok": true,
 		"disabled": res.Disabled, "failed": res.Failed,
 		"disabled_count": res.DisabledCount, "failed_count": res.FailedCount,
+	})
+}
+
+// CardPlatformBatchEnableCDKs POST /api/v1/admin/cardplatform/cdks/batch-enable
+func CardPlatformBatchEnableCDKs(c *gin.Context) {
+	var req struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.IDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ids required"})
+		return
+	}
+	if len(req.IDs) > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ids max 100"})
+		return
+	}
+	cli := cardplatform.NewFromSettings()
+	res, err := cli.BatchEnableCDKs(c.Request.Context(), req.IDs)
+	if err != nil {
+		writeCardErr(c, err)
+		return
+	}
+	for _, id := range res.Enabled {
+		_ = db.UpdateCardplatformCDKStatus(id, "unused")
+	}
+	u, _ := c.Get("username")
+	username, _ := u.(string)
+	db.WriteAudit(username, "cardplatform_batch_enable_cdk",
+		"ok="+strconv.Itoa(res.EnabledCount)+" fail="+strconv.Itoa(res.FailedCount), c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{
+		"ok": true,
+		"enabled": res.Enabled, "failed": res.Failed,
+		"enabled_count": res.EnabledCount, "failed_count": res.FailedCount,
 	})
 }
 

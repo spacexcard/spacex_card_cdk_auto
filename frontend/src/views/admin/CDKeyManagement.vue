@@ -177,14 +177,13 @@
             @clear="searchList"
           />
           <el-select
-            v-if="listMode === 'upstream'"
             v-model="listStatus"
             clearable
             placeholder="状态"
             class="!w-[140px]"
             @change="searchList"
           >
-            <el-option v-for="s in statusOptions" :key="s" :label="s" :value="s" />
+            <el-option v-for="s in statusOptions" :key="s" :label="statusLabel(s)" :value="s" />
           </el-select>
           <el-select v-model="listPlan" clearable placeholder="套餐" class="!w-[140px]" @change="searchList">
             <el-option label="Plus" value="plus" />
@@ -224,6 +223,16 @@
             @click="batchDisableSelected"
           >
             批量禁用 ({{ selectedDisableableIds.length }})
+          </el-button>
+          <el-button
+            size="small"
+            type="warning"
+            plain
+            :loading="disabling"
+            :disabled="!selectedEnableableIds.length"
+            @click="batchEnableSelected"
+          >
+            批量解除禁用 ({{ selectedEnableableIds.length }})
           </el-button>
           <el-button size="small" text :disabled="!selectedRows.length" @click="clearSelection">清空选择</el-button>
         </div>
@@ -267,9 +276,9 @@
             <el-table-column prop="plan" label="套餐" width="100">
               <template #default="{ row }">{{ planLabel(row.plan) }}</template>
             </el-table-column>
-            <el-table-column v-if="listMode === 'upstream'" prop="status" label="状态" width="100">
+            <el-table-column prop="status" label="状态" width="110">
               <template #default="{ row }">
-                <el-tag size="small" :type="statusType(row.status)">{{ row.status || '—' }}</el-tag>
+                <el-tag size="small" :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag>
               </template>
             </el-table-column>
             <el-table-column label="服务费" width="90">
@@ -278,7 +287,7 @@
               </template>
             </el-table-column>
             <el-table-column prop="created_at" label="时间" min-width="140" />
-            <el-table-column label="操作" width="150" fixed="right">
+            <el-table-column label="操作" width="200" fixed="right">
               <template #default="{ row }">
                 <el-button
                   size="small"
@@ -290,13 +299,24 @@
                   复制
                 </el-button>
                 <el-button
+                  v-if="canDisableRow(row)"
                   size="small"
                   type="danger"
                   link
-                  :disabled="!canDisableRow(row) || disabling"
+                  :disabled="disabling"
                   @click="disableOne(row)"
                 >
                   禁用
+                </el-button>
+                <el-button
+                  v-if="canEnableRow(row)"
+                  size="small"
+                  type="warning"
+                  link
+                  :disabled="disabling"
+                  @click="enableOne(row)"
+                >
+                  解除禁用
                 </el-button>
               </template>
             </el-table-column>
@@ -418,13 +438,18 @@ const selectedFullCodes = computed(() =>
 )
 const fullSelectableCount = computed(() => displayRows.value.filter((r) => !!r.fullCode).length)
 
-/** 可禁用：有 id 且状态为 unused（完整码库无状态时默认允许，由卡台校验） */
+/** 可禁用：有 id 且状态为 unused */
 function canDisableRow(row: any) {
   const id = Number(row?.id)
   if (!Number.isFinite(id) || id <= 0) return false
-  const st = String(row?.status || '').toLowerCase()
-  if (!st) return listMode.value === 'stored' // 码库无状态字段，允许点禁用由上游拒绝
-  return st === 'unused'
+  const st = String(row?.status || 'unused').toLowerCase()
+  return st === 'unused' || st === ''
+}
+/** 可解除禁用：status=disabled */
+function canEnableRow(row: any) {
+  const id = Number(row?.id)
+  if (!Number.isFinite(id) || id <= 0) return false
+  return String(row?.status || '').toLowerCase() === 'disabled'
 }
 const selectedDisableableIds = computed(() => {
   const ids: number[] = []
@@ -438,10 +463,21 @@ const selectedDisableableIds = computed(() => {
   }
   return ids
 })
+const selectedEnableableIds = computed(() => {
+  const ids: number[] = []
+  const seen = new Set<number>()
+  for (const r of selectedRows.value) {
+    if (!canEnableRow(r)) continue
+    const id = Number(r.id)
+    if (!Number.isFinite(id) || id <= 0 || seen.has(id)) continue
+    seen.add(id)
+    ids.push(id)
+  }
+  return ids
+})
 
 function rowSelectable(row: any) {
-  // 有完整码可勾选复制；或 unused 可勾选禁用
-  return !!row?.fullCode || canDisableRow(row)
+  return !!row?.fullCode || canDisableRow(row) || canEnableRow(row)
 }
 function onSelectionChange(rowsSel: any[]) {
   selectedRows.value = Array.isArray(rowsSel) ? rowsSel : []
@@ -583,7 +619,7 @@ async function batchDisableSelected() {
     return
   }
   const ok = await dialog.confirm(
-    `将禁用 ${ids.length} 张未使用 CDK，禁用后不可兑换（不退服务费）。确定？`,
+    `将禁用 ${ids.length} 张未使用 CDK，禁用后不可兑换（不退服务费，可再「解除禁用」）。确定？`,
     { title: '批量禁用', okText: '批量禁用', danger: true },
   )
   if (!ok) return
@@ -601,6 +637,63 @@ async function batchDisableSelected() {
     const nOk = Number(d.disabled_count) || (Array.isArray(d.disabled) ? d.disabled.length : 0)
     const nFail = Number(d.failed_count) || (Array.isArray(d.failed) ? d.failed.length : 0)
     dialog.toast(`禁用完成：成功 ${nOk}，失败 ${nFail}`, nFail ? 'warn' : 'ok')
+    await loadList()
+  } finally {
+    disabling.value = false
+  }
+}
+
+async function enableOne(row: any) {
+  const id = Number(row?.id)
+  if (!canEnableRow(row) || !id) {
+    dialog.toast('只能对「已禁用」的 CDK 解除禁用', 'warn')
+    return
+  }
+  const ok = await dialog.confirm(`确定解除禁用 ID ${id}？解除后恢复为未使用，可再次兑换。`, {
+    title: '解除禁用',
+    okText: '解除禁用',
+  })
+  if (!ok) return
+  disabling.value = true
+  try {
+    const r = await authFetch(`/api/v1/admin/cardplatform/cdks/${id}/enable`, { method: 'POST', body: '{}' })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      dialog.toast(d.error || d.msg || '解除失败', 'err')
+      return
+    }
+    dialog.toast(`已解除禁用 #${id}`, 'ok')
+    await loadList()
+  } finally {
+    disabling.value = false
+  }
+}
+
+async function batchEnableSelected() {
+  const ids = selectedEnableableIds.value
+  if (!ids.length) {
+    dialog.toast('请勾选「已禁用」的 CDK', 'warn')
+    return
+  }
+  const ok = await dialog.confirm(
+    `将解除禁用 ${ids.length} 张 CDK，恢复为未使用。确定？`,
+    { title: '批量解除禁用', okText: '解除禁用' },
+  )
+  if (!ok) return
+  disabling.value = true
+  try {
+    const r = await authFetch('/api/v1/admin/cardplatform/cdks/batch-enable', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      dialog.toast(d.error || d.msg || '批量解除失败', 'err')
+      return
+    }
+    const nOk = Number(d.enabled_count) || (Array.isArray(d.enabled) ? d.enabled.length : 0)
+    const nFail = Number(d.failed_count) || (Array.isArray(d.failed) ? d.failed.length : 0)
+    dialog.toast(`解除完成：成功 ${nOk}，失败 ${nFail}`, nFail ? 'warn' : 'ok')
     await loadList()
   } finally {
     disabling.value = false
@@ -638,11 +731,26 @@ function selectPlan(k: string) {
   form.plan = k
 }
 function statusType(s: string) {
-  if (s === 'unused') return 'success'
-  if (s === 'consumed') return 'info'
-  if (s === 'frozen') return 'warning'
-  if (s === 'disabled') return 'danger'
-  return ''
+  const st = String(s || '').toLowerCase()
+  if (st === 'unused' || st === '') return 'success'
+  if (st === 'consumed') return 'info'
+  if (st === 'reserved' || st === 'review') return 'warning'
+  if (st === 'frozen') return 'warning'
+  if (st === 'disabled') return 'danger'
+  return 'info'
+}
+function statusLabel(s: string) {
+  const st = String(s || '').toLowerCase()
+  const map: Record<string, string> = {
+    unused: '未使用',
+    reserved: '预留中',
+    consumed: '已消耗',
+    frozen: '已冻结',
+    disabled: '已禁用',
+    review: '待审核',
+  }
+  if (!st) return '未使用'
+  return map[st] || st
 }
 
 function isFullCode(code: string) {
@@ -941,6 +1049,7 @@ async function loadList() {
       const qs = new URLSearchParams({ limit: '5000' })
       if (listQ.value.trim()) qs.set('q', listQ.value.trim())
       if (listPlan.value) qs.set('plan', listPlan.value)
+      if (listStatus.value) qs.set('status', listStatus.value)
       const r = await authFetch(`/api/v1/admin/cardplatform/cdks/stored?${qs.toString()}`)
       const d = await r.json().catch(() => ({}))
       if (!r.ok) {

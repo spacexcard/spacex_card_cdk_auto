@@ -302,12 +302,52 @@ func (c *Client) DisableCDK(ctx context.Context, id int64) error {
 	return err
 }
 
+// EnableCDK POST /gpt-direct/cdks/:id/enable — 解除禁用。
+func (c *Client) EnableCDK(ctx context.Context, id int64) error {
+	if id <= 0 {
+		return fmt.Errorf("invalid cdk id")
+	}
+	path := fmt.Sprintf("/gpt-direct/cdks/%d/enable", id)
+	_, err := c.doOpenAPI(ctx, http.MethodPost, path, map[string]any{}, "")
+	return err
+}
+
 // BatchDisableCDKs POST /gpt-direct/cdks/batch-disable — 批量禁用。
 type BatchDisableCDKResult struct {
 	Disabled      []int64          `json:"disabled"`
 	Failed        []map[string]any `json:"failed"`
 	DisabledCount int              `json:"disabled_count"`
 	FailedCount   int              `json:"failed_count"`
+}
+
+// BatchEnableCDKResult 批量解除禁用结果。
+type BatchEnableCDKResult struct {
+	Enabled      []int64          `json:"enabled"`
+	Failed       []map[string]any `json:"failed"`
+	EnabledCount int              `json:"enabled_count"`
+	FailedCount  int              `json:"failed_count"`
+}
+
+func parseIDListResult(data json.RawMessage, okKey, countKey string) (ids []int64, failed []map[string]any, okN, failN int, err error) {
+	var loose map[string]any
+	if err = json.Unmarshal(data, &loose); err != nil {
+		return
+	}
+	okN = anyToInt(loose[countKey])
+	failN = anyToInt(loose["failed_count"])
+	if arr, ok := loose[okKey].([]any); ok {
+		for _, v := range arr {
+			ids = append(ids, int64(anyToInt(v)))
+		}
+	}
+	if arr, ok := loose["failed"].([]any); ok {
+		for _, v := range arr {
+			if m, ok := v.(map[string]any); ok {
+				failed = append(failed, m)
+			}
+		}
+	}
+	return
 }
 
 func (c *Client) BatchDisableCDKs(ctx context.Context, ids []int64) (*BatchDisableCDKResult, error) {
@@ -318,30 +358,26 @@ func (c *Client) BatchDisableCDKs(ctx context.Context, ids []int64) (*BatchDisab
 	if err != nil {
 		return nil, err
 	}
-	var out BatchDisableCDKResult
-	if err := json.Unmarshal(data, &out); err != nil {
-		// 宽松：disabled 可能是 float
-		var loose map[string]any
-		if json.Unmarshal(data, &loose) != nil {
-			return nil, err
-		}
-		out.DisabledCount = anyToInt(loose["disabled_count"])
-		out.FailedCount = anyToInt(loose["failed_count"])
-		if arr, ok := loose["disabled"].([]any); ok {
-			for _, v := range arr {
-				out.Disabled = append(out.Disabled, int64(anyToInt(v)))
-			}
-		}
-		if arr, ok := loose["failed"].([]any); ok {
-			for _, v := range arr {
-				if m, ok := v.(map[string]any); ok {
-					out.Failed = append(out.Failed, m)
-				}
-			}
-		}
-		return &out, nil
+	idsOK, failed, okN, failN, err := parseIDListResult(data, "disabled", "disabled_count")
+	if err != nil {
+		return nil, err
 	}
-	return &out, nil
+	return &BatchDisableCDKResult{Disabled: idsOK, Failed: failed, DisabledCount: okN, FailedCount: failN}, nil
+}
+
+func (c *Client) BatchEnableCDKs(ctx context.Context, ids []int64) (*BatchEnableCDKResult, error) {
+	if len(ids) == 0 {
+		return &BatchEnableCDKResult{}, nil
+	}
+	data, err := c.doOpenAPI(ctx, http.MethodPost, "/gpt-direct/cdks/batch-enable", map[string]any{"ids": ids}, "")
+	if err != nil {
+		return nil, err
+	}
+	idsOK, failed, okN, failN, err := parseIDListResult(data, "enabled", "enabled_count")
+	if err != nil {
+		return nil, err
+	}
+	return &BatchEnableCDKResult{Enabled: idsOK, Failed: failed, EnabledCount: okN, FailedCount: failN}, nil
 }
 
 // IssueCDKs POST /gpt-direct/cdks

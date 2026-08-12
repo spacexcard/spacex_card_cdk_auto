@@ -80,6 +80,7 @@ func createTables() error {
 			code_prefix TEXT,
 			plan TEXT,
 			fee_amount_minor INTEGER DEFAULT 0,
+			status TEXT DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_cp_cdk_upstream ON cardplatform_cdk_codes(upstream_id)`,
@@ -218,10 +219,27 @@ func createTables() error {
 	if err := migrateDefaultCardSelectionRules(); err != nil {
 		return err
 	}
+	if err := migrateCardplatformCDKStatusCol(); err != nil {
+		log.Printf("migrateCardplatformCDKStatusCol: %v", err)
+	}
 	if err := ensureDefaultAdmin(); err != nil {
 		return err
 	}
 	return nil
+}
+
+// migrateCardplatformCDKStatusCol 为已存完整码表补 status（禁用后列表要展示）。
+func migrateCardplatformCDKStatusCol() error {
+	if DB == nil {
+		return nil
+	}
+	var n int
+	err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('cardplatform_cdk_codes') WHERE name='status'`).Scan(&n)
+	if err != nil || n > 0 {
+		return err
+	}
+	_, err = DB.Exec(`ALTER TABLE cardplatform_cdk_codes ADD COLUMN status TEXT DEFAULT ''`)
+	return err
 }
 
 // legacySHA256 是旧的（不安全）哈希算法，仅用于兼容历史数据并在登录时升级为 bcrypt。
@@ -810,6 +828,11 @@ func legacyUUIDCode(planType string, id int64) string {
 // SaveCardplatformCDKCode 把完整码写入本站 SQLite（发码 / 回填）。
 // 卡台列表只回 code_prefix，完整码仅本站 DB 可补全。
 func SaveCardplatformCDKCode(upstreamID int64, code, prefix, plan string, feeMinor int64) error {
+	return SaveCardplatformCDKCodeWithStatus(upstreamID, code, prefix, plan, feeMinor, "unused")
+}
+
+// SaveCardplatformCDKCodeWithStatus 同上，并写入/更新 status。
+func SaveCardplatformCDKCodeWithStatus(upstreamID int64, code, prefix, plan string, feeMinor int64, status string) error {
 	if DB == nil {
 		return fmt.Errorf("db not init")
 	}
@@ -822,19 +845,37 @@ func SaveCardplatformCDKCode(upstreamID int64, code, prefix, plan string, feeMin
 		prefix = code[:14]
 	}
 	plan = strings.TrimSpace(plan)
+	status = strings.TrimSpace(strings.ToLower(status))
+	if status == "" {
+		status = "unused"
+	}
 	_, err := DB.Exec(`
-		INSERT INTO cardplatform_cdk_codes (upstream_id, code, code_prefix, plan, fee_amount_minor, created_at)
-		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		INSERT INTO cardplatform_cdk_codes (upstream_id, code, code_prefix, plan, fee_amount_minor, status, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(code) DO UPDATE SET
 			upstream_id = excluded.upstream_id,
 			code_prefix = excluded.code_prefix,
 			plan = CASE WHEN excluded.plan != '' THEN excluded.plan ELSE cardplatform_cdk_codes.plan END,
-			fee_amount_minor = CASE WHEN excluded.fee_amount_minor > 0 THEN excluded.fee_amount_minor ELSE cardplatform_cdk_codes.fee_amount_minor END
-	`, upstreamID, code, prefix, plan, feeMinor)
+			fee_amount_minor = CASE WHEN excluded.fee_amount_minor > 0 THEN excluded.fee_amount_minor ELSE cardplatform_cdk_codes.fee_amount_minor END,
+			status = CASE WHEN excluded.status != '' THEN excluded.status ELSE cardplatform_cdk_codes.status END
+	`, upstreamID, code, prefix, plan, feeMinor, status)
 	if err != nil {
 		return fmt.Errorf("save cardplatform cdk: %w", err)
 	}
 	return nil
+}
+
+// UpdateCardplatformCDKStatus 按上游 id 更新本站缓存的状态（禁用/解禁后刷新列表）。
+func UpdateCardplatformCDKStatus(upstreamID int64, status string) error {
+	if DB == nil || upstreamID <= 0 {
+		return nil
+	}
+	status = strings.TrimSpace(strings.ToLower(status))
+	if status == "" {
+		return nil
+	}
+	_, err := DB.Exec(`UPDATE cardplatform_cdk_codes SET status = ? WHERE upstream_id = ?`, status, upstreamID)
+	return err
 }
 
 // CountCardplatformCDKCodes 本站已存完整码数量（运维/健康检查）。
@@ -854,12 +895,18 @@ type StoredCDKCode struct {
 	CodePrefix     string `json:"code_prefix"`
 	Plan           string `json:"plan"`
 	FeeAmountMinor int64  `json:"fee_amount_minor"`
+	Status         string `json:"status"`
 	CreatedAt      string `json:"created_at"`
 }
 
-// ListCardplatformStoredCDKCodes 列出本站 SQLite 中的完整码（可按 plan / q 过滤）。
+// ListCardplatformStoredCDKCodes 列出本站 SQLite 中的完整码（可按 plan / q / status 过滤）。
 // limit<=0 时默认 5000，硬顶 10000。
 func ListCardplatformStoredCDKCodes(plan, q string, limit int) ([]StoredCDKCode, error) {
+	return ListCardplatformStoredCDKCodesFilter(plan, q, "", limit)
+}
+
+// ListCardplatformStoredCDKCodesFilter 可按 status 过滤。
+func ListCardplatformStoredCDKCodesFilter(plan, q, status string, limit int) ([]StoredCDKCode, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not init")
 	}
@@ -871,14 +918,19 @@ func ListCardplatformStoredCDKCodes(plan, q string, limit int) ([]StoredCDKCode,
 	}
 	plan = strings.TrimSpace(plan)
 	q = strings.TrimSpace(q)
+	status = strings.TrimSpace(strings.ToLower(status))
 	sql := `
 		SELECT COALESCE(upstream_id,0), code, COALESCE(code_prefix,''), COALESCE(plan,''),
-		       COALESCE(fee_amount_minor,0), COALESCE(created_at,'')
+		       COALESCE(fee_amount_minor,0), COALESCE(status,''), COALESCE(created_at,'')
 		FROM cardplatform_cdk_codes WHERE 1=1`
 	args := []any{}
 	if plan != "" {
 		sql += ` AND plan = ?`
 		args = append(args, plan)
+	}
+	if status != "" {
+		sql += ` AND status = ?`
+		args = append(args, status)
 	}
 	if q != "" {
 		sql += ` AND (code LIKE ? OR code_prefix LIKE ? OR CAST(upstream_id AS TEXT) = ?)`
@@ -895,12 +947,15 @@ func ListCardplatformStoredCDKCodes(plan, q string, limit int) ([]StoredCDKCode,
 	out := make([]StoredCDKCode, 0, 64)
 	for rows.Next() {
 		var it StoredCDKCode
-		if err := rows.Scan(&it.UpstreamID, &it.Code, &it.CodePrefix, &it.Plan, &it.FeeAmountMinor, &it.CreatedAt); err != nil {
+		if err := rows.Scan(&it.UpstreamID, &it.Code, &it.CodePrefix, &it.Plan, &it.FeeAmountMinor, &it.Status, &it.CreatedAt); err != nil {
 			return nil, err
 		}
 		it.Code = strings.TrimSpace(it.Code)
 		if it.Code == "" {
 			continue
+		}
+		if it.Status == "" {
+			it.Status = "unused"
 		}
 		out = append(out, it)
 	}
