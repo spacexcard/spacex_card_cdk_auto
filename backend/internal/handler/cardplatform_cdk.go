@@ -274,6 +274,55 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 	})
 }
 
+// CardPlatformDisableCDK POST /api/v1/admin/cardplatform/cdks/:id/disable
+func CardPlatformDisableCDK(c *gin.Context) {
+	id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	cli := cardplatform.NewFromSettings()
+	if err := cli.DisableCDK(c.Request.Context(), id); err != nil {
+		writeCardErr(c, err)
+		return
+	}
+	u, _ := c.Get("username")
+	username, _ := u.(string)
+	db.WriteAudit(username, "cardplatform_disable_cdk", "id="+strconv.FormatInt(id, 10), c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"ok": true, "id": id, "status": "disabled"})
+}
+
+// CardPlatformBatchDisableCDKs POST /api/v1/admin/cardplatform/cdks/batch-disable
+// body: { ids: [1,2,3] }
+func CardPlatformBatchDisableCDKs(c *gin.Context) {
+	var req struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.IDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ids required"})
+		return
+	}
+	if len(req.IDs) > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ids max 100"})
+		return
+	}
+	cli := cardplatform.NewFromSettings()
+	res, err := cli.BatchDisableCDKs(c.Request.Context(), req.IDs)
+	if err != nil {
+		writeCardErr(c, err)
+		return
+	}
+	u, _ := c.Get("username")
+	username, _ := u.(string)
+	db.WriteAudit(username, "cardplatform_batch_disable_cdk",
+		"ok="+strconv.Itoa(res.DisabledCount)+" fail="+strconv.Itoa(res.FailedCount), c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{
+		"ok": true,
+		"disabled": res.Disabled, "failed": res.Failed,
+		"disabled_count": res.DisabledCount, "failed_count": res.FailedCount,
+	})
+}
+
 // CardPlatformListCDKs GET /api/v1/admin/cardplatform/cdks?page=&page_size=&q=&status=&plan=
 func CardPlatformListCDKs(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))

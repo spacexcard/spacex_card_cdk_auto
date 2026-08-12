@@ -292,6 +292,58 @@ type IssueCDKResult struct {
 	Issued    []IssuedCDK `json:"issued"`
 }
 
+// DisableCDK POST /gpt-direct/cdks/:id/disable — 禁用未使用 CDK。
+func (c *Client) DisableCDK(ctx context.Context, id int64) error {
+	if id <= 0 {
+		return fmt.Errorf("invalid cdk id")
+	}
+	path := fmt.Sprintf("/gpt-direct/cdks/%d/disable", id)
+	_, err := c.doOpenAPI(ctx, http.MethodPost, path, map[string]any{}, "")
+	return err
+}
+
+// BatchDisableCDKs POST /gpt-direct/cdks/batch-disable — 批量禁用。
+type BatchDisableCDKResult struct {
+	Disabled      []int64          `json:"disabled"`
+	Failed        []map[string]any `json:"failed"`
+	DisabledCount int              `json:"disabled_count"`
+	FailedCount   int              `json:"failed_count"`
+}
+
+func (c *Client) BatchDisableCDKs(ctx context.Context, ids []int64) (*BatchDisableCDKResult, error) {
+	if len(ids) == 0 {
+		return &BatchDisableCDKResult{}, nil
+	}
+	data, err := c.doOpenAPI(ctx, http.MethodPost, "/gpt-direct/cdks/batch-disable", map[string]any{"ids": ids}, "")
+	if err != nil {
+		return nil, err
+	}
+	var out BatchDisableCDKResult
+	if err := json.Unmarshal(data, &out); err != nil {
+		// 宽松：disabled 可能是 float
+		var loose map[string]any
+		if json.Unmarshal(data, &loose) != nil {
+			return nil, err
+		}
+		out.DisabledCount = anyToInt(loose["disabled_count"])
+		out.FailedCount = anyToInt(loose["failed_count"])
+		if arr, ok := loose["disabled"].([]any); ok {
+			for _, v := range arr {
+				out.Disabled = append(out.Disabled, int64(anyToInt(v)))
+			}
+		}
+		if arr, ok := loose["failed"].([]any); ok {
+			for _, v := range arr {
+				if m, ok := v.(map[string]any); ok {
+					out.Failed = append(out.Failed, m)
+				}
+			}
+		}
+		return &out, nil
+	}
+	return &out, nil
+}
+
 // IssueCDKs POST /gpt-direct/cdks
 func (c *Client) IssueCDKs(ctx context.Context, plan string, count int, idem string) (*IssueCDKResult, error) {
 	if count < 1 {
