@@ -807,29 +807,44 @@ func legacyUUIDCode(planType string, id int64) string {
 	return fmt.Sprintf("%s-%s-%s-%s-%s", hexID[0:8], hexID[8:12], hexID[12:16], hexID[16:20], hexID[20:32])
 }
 
-// SaveCardplatformCDKCode 发码成功后缓存完整码（列表接口卡台只回 prefix）。
+// SaveCardplatformCDKCode 把完整码写入本站 SQLite（发码 / 回填）。
+// 卡台列表只回 code_prefix，完整码仅本站 DB 可补全。
 func SaveCardplatformCDKCode(upstreamID int64, code, prefix, plan string, feeMinor int64) error {
 	if DB == nil {
 		return fmt.Errorf("db not init")
 	}
 	code = strings.TrimSpace(code)
 	if code == "" {
-		return nil
+		return fmt.Errorf("empty code")
 	}
 	prefix = strings.TrimSpace(prefix)
 	if prefix == "" && len(code) >= 14 {
 		prefix = code[:14]
 	}
+	plan = strings.TrimSpace(plan)
 	_, err := DB.Exec(`
 		INSERT INTO cardplatform_cdk_codes (upstream_id, code, code_prefix, plan, fee_amount_minor, created_at)
 		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(code) DO UPDATE SET
 			upstream_id = excluded.upstream_id,
 			code_prefix = excluded.code_prefix,
-			plan = excluded.plan,
-			fee_amount_minor = excluded.fee_amount_minor
-	`, upstreamID, code, prefix, strings.TrimSpace(plan), feeMinor)
-	return err
+			plan = CASE WHEN excluded.plan != '' THEN excluded.plan ELSE cardplatform_cdk_codes.plan END,
+			fee_amount_minor = CASE WHEN excluded.fee_amount_minor > 0 THEN excluded.fee_amount_minor ELSE cardplatform_cdk_codes.fee_amount_minor END
+	`, upstreamID, code, prefix, plan, feeMinor)
+	if err != nil {
+		return fmt.Errorf("save cardplatform cdk: %w", err)
+	}
+	return nil
+}
+
+// CountCardplatformCDKCodes 本站已存完整码数量（运维/健康检查）。
+func CountCardplatformCDKCodes() int {
+	if DB == nil {
+		return 0
+	}
+	var n int
+	_ = DB.QueryRow(`SELECT COUNT(*) FROM cardplatform_cdk_codes`).Scan(&n)
+	return n
 }
 
 // LookupCardplatformCDKCode 按上游 id 或 prefix 取完整码。

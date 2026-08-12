@@ -140,6 +140,7 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 	db.WriteAudit(username, "cardplatform_issue_cdk", "plan="+plan+" count="+strconv.Itoa(req.Count), c.ClientIP())
 	// 规范化：保证前端总能拿到完整 code 字段；绝不把 code_prefix 填进 code
 	issued := make([]gin.H, 0, len(res.Issued))
+	stored, storeFailed := 0, 0
 	for _, it := range res.Issued {
 		code := strings.TrimSpace(it.Code)
 		prefix := strings.TrimSpace(it.CodePrefix)
@@ -148,28 +149,86 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 			issued = append(issued, gin.H{
 				"id": it.ID, "code": "", "plan": it.Plan,
 				"code_prefix": prefix, "fee_amount_minor": it.FeeAmountMinor,
-				"incomplete": true,
+				"incomplete": true, "stored": false,
 			})
 			continue
 		}
 		if prefix == "" && len(code) >= 14 {
 			prefix = code[:14]
 		}
-		// 本站持久化完整码：列表页卡台只回 prefix 时仍可复制完整码
+		// 本站 SQLite 持久化完整码（卡台列表只回 prefix）
+		storedOK := false
 		if err := db.SaveCardplatformCDKCode(it.ID, code, prefix, it.Plan, it.FeeAmountMinor); err != nil {
-			// 不阻断发码响应
+			storeFailed++
+			log.Printf("[cdk-issue] save full code failed id=%d prefix=%s: %v", it.ID, prefix, err)
+		} else {
+			stored++
+			storedOK = true
 		}
 		issued = append(issued, gin.H{
 			"id": it.ID, "code": code, "plan": it.Plan,
 			"code_prefix": prefix, "fee_amount_minor": it.FeeAmountMinor,
 			"code_length": len(code),
-			"full_code":  code,
+			"full_code":   code,
+			"stored":      storedOK,
+			"has_full_code": true,
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"requested": res.Requested,
-		"issued":    issued,
-		"count":     len(issued),
+		"requested":     res.Requested,
+		"issued":        issued,
+		"count":         len(issued),
+		"stored_count":  stored,
+		"store_failed":  storeFailed,
+		"server_stored": true,
+	})
+}
+
+// CardPlatformStoreCDKCodes POST /api/v1/admin/cardplatform/cdks/store
+// 把完整码写入本站 SQLite（发码时自动写；也可用本机缓存/导出回填历史码）。
+// body: { items: [{ id, code, code_prefix?, plan?, fee_amount_minor? }] }
+func CardPlatformStoreCDKCodes(c *gin.Context) {
+	var req struct {
+		Items []struct {
+			ID             int64  `json:"id"`
+			Code           string `json:"code"`
+			CodePrefix     string `json:"code_prefix"`
+			Plan           string `json:"plan"`
+			FeeAmountMinor int64  `json:"fee_amount_minor"`
+		} `json:"items"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.Items) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "items required"})
+		return
+	}
+	if len(req.Items) > 500 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "items max 500"})
+		return
+	}
+	saved, skipped, failed := 0, 0, 0
+	for _, it := range req.Items {
+		code := strings.TrimSpace(it.Code)
+		if len(code) < 20 || !strings.Contains(code, "-") {
+			skipped++
+			continue
+		}
+		prefix := strings.TrimSpace(it.CodePrefix)
+		if prefix == "" && len(code) >= 14 {
+			prefix = code[:14]
+		}
+		if err := db.SaveCardplatformCDKCode(it.ID, code, prefix, it.Plan, it.FeeAmountMinor); err != nil {
+			failed++
+			log.Printf("[cdk-store] save failed id=%d: %v", it.ID, err)
+			continue
+		}
+		saved++
+	}
+	u, _ := c.Get("username")
+	username, _ := u.(string)
+	db.WriteAudit(username, "cardplatform_store_cdk",
+		"saved="+strconv.Itoa(saved)+" skipped="+strconv.Itoa(skipped)+" failed="+strconv.Itoa(failed), c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{
+		"ok": true, "saved": saved, "skipped": skipped, "failed": failed,
 	})
 }
 
@@ -199,6 +258,7 @@ func CardPlatformListCDKs(c *gin.Context) {
 		HasFullCode    bool   `json:"has_full_code"`
 	}
 	out := make([]rowOut, 0, len(res.List))
+	withFull := 0
 	for _, it := range res.List {
 		full, ok := db.LookupCardplatformCDKCode(it.ID, it.CodePrefix)
 		row := rowOut{
@@ -209,10 +269,17 @@ func CardPlatformListCDKs(c *gin.Context) {
 		if ok {
 			row.Code = full
 			row.FullCode = full
+			withFull++
 		}
 		out = append(out, row)
 	}
-	c.JSON(http.StatusOK, gin.H{"list": out, "total": res.Total})
+	c.JSON(http.StatusOK, gin.H{
+		"list":               out,
+		"total":              res.Total,
+		"full_code_on_page":  withFull,
+		"full_code_in_store": db.CountCardplatformCDKCodes(),
+		"server_stored":      true,
+	})
 }
 
 // CardPlatformListCDKOrders GET /api/v1/admin/cardplatform/cdk-orders

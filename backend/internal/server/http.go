@@ -184,6 +184,7 @@ func setupRoutes(r *gin.Engine) {
 			admin.GET("/cardplatform/balance", handler.CardPlatformBalance)
 			admin.GET("/cardplatform/cdks", handler.CardPlatformListCDKs)
 			admin.POST("/cardplatform/cdks", handler.CardPlatformIssueCDKs)
+			admin.POST("/cardplatform/cdks/store", handler.CardPlatformStoreCDKCodes)
 			admin.GET("/cardplatform/cdk-orders", handler.CardPlatformListCDKOrders)
 			admin.GET("/cardplatform/cdk-orders/:id", handler.CardPlatformGetCDKOrder)
 			admin.DELETE("/cardplatform/cards/:id", handler.CardPlatformDeleteCard)

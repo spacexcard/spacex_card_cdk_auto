@@ -4,7 +4,7 @@
       <div>
         <h1 class="text-3xl font-bold text-ink">CDK 卡密</h1>
         <p class="text-sm text-muted mt-2">
-          卡台 Open API 发码 · 服务费实时计价 · 完整码本机缓存，列表可点复制
+          卡台 Open API 发码 · 服务费实时计价 · 完整码存本站服务器，列表可点复制
         </p>
       </div>
       <div class="flex flex-wrap gap-2">
@@ -106,7 +106,7 @@
             <div>
               <div class="text-sm font-medium" style="color: var(--good)">完整码（本批 {{ recentCodes.length }} 张）</div>
               <div class="text-xs text-muted mt-0.5">
-                卡台明文只返回一次；本页已缓存在浏览器 sessionStorage，刷新后仍可复制。
+                已写入本站服务器；列表刷新后仍可点码复制。本批结果也暂存在浏览器便于导出。
                 <span v-if="recentMeta">套餐 {{ recentMeta.plan }} · {{ recentMeta.atLabel }}</span>
               </div>
             </div>
@@ -150,10 +150,17 @@
           <div>
             <h2 class="text-lg font-semibold text-ink">卡台 CDK 列表</h2>
             <p class="text-xs text-muted">
-              完整码在本机缓存（发码成功时写入）；点击码即可复制 · 共 {{ total }} 条
+              完整码存服务器（发码时写入）；点击码即可复制 · 共 {{ total }} 条
+              <span v-if="storeStats.fullInStore != null"> · 本站已存 {{ storeStats.fullInStore }} 条完整码</span>
+              <span v-if="storeStats.fullOnPage != null"> · 本页完整 {{ storeStats.fullOnPage }}</span>
             </p>
           </div>
-          <el-button :loading="loadingList" @click="loadList">刷新</el-button>
+          <div class="flex flex-wrap gap-2">
+            <el-button size="small" :loading="syncingCache" @click="syncLocalCacheToServer" title="把浏览器里旧的完整码缓存上传到服务器">
+              同步本机缓存到服务器
+            </el-button>
+            <el-button :loading="loadingList" @click="loadList">刷新</el-button>
+          </div>
         </div>
         <div class="card flex flex-wrap items-center gap-2 !py-3">
           <el-input
@@ -239,14 +246,16 @@ import { dialog } from '../../lib/dialog'
 import { copyToClipboard } from '../../lib/clipboard'
 
 const RECENT_KEY = 'cdk_recent_issued_v1'
-/** 完整码本机持久缓存：卡台列表不再回传明文，发码成功时写入 */
+/** 浏览器兜底缓存（历史本机数据）；主存储已改为服务器 SQLite */
 const CODE_CACHE_KEY = 'cdk_full_code_cache_v1'
 /** 卡台完整码形如 GPTD-xxxxxxxxxxxx-xxxxxxxxxxxx-xxxxxxxxxxxx（约 43 字符） */
 const FULL_CODE_MIN_LEN = 20
 
-type CodeCacheEntry = { code: string; plan?: string; prefix?: string; at?: number }
-/** id -> entry；prefix -> entry */
+type CodeCacheEntry = { code: string; plan?: string; prefix?: string; at?: number; id?: number }
+/** id -> entry；prefix -> entry（仅作兜底 / 回填服务器） */
 const codeCache = ref<Record<string, CodeCacheEntry>>({})
+const storeStats = reactive({ fullOnPage: null as number | null, fullInStore: null as number | null })
+const syncingCache = ref(false)
 
 const plans = ref<Record<string, any>>({})
 const pricingVersion = ref<number | null>(null)
@@ -389,7 +398,13 @@ function rememberIssued(items: any[], plan: string) {
     if (!code) continue
     const id = it?.id != null ? String(it.id) : ''
     const prefix = String(it?.code_prefix || code.slice(0, 14) || '').trim()
-    const entry: CodeCacheEntry = { code, plan, prefix, at: Date.now() }
+    const entry: CodeCacheEntry = {
+      code,
+      plan: String(it?.plan || plan || ''),
+      prefix,
+      at: Date.now(),
+      id: it?.id != null ? Number(it.id) : undefined,
+    }
     if (id) next[`id:${id}`] = entry
     if (prefix) next[`pfx:${prefix}`] = entry
     next[`code:${code}`] = entry
@@ -400,20 +415,62 @@ function rememberIssued(items: any[], plan: string) {
 
 function lookupFullCode(row: any): string {
   if (!row) return ''
-  const id = row.id != null ? String(row.id) : ''
-  const prefix = String(row.code_prefix || '').trim()
+  // 优先服务器列表补全的 full_code / code
   const direct = extractFullCode(row)
   if (direct) return direct
+  // 兜底：浏览器旧缓存（历史未落库的码）
+  const id = row.id != null ? String(row.id) : ''
+  const prefix = String(row.code_prefix || '').trim()
   const cache = codeCache.value
   if (id && cache[`id:${id}`]?.code) return cache[`id:${id}`].code
   if (prefix && cache[`pfx:${prefix}`]?.code) return cache[`pfx:${prefix}`].code
-  // 宽松：prefix 是完整码前缀
   if (prefix) {
     for (const v of Object.values(cache)) {
       if (v?.code && v.code.startsWith(prefix)) return v.code
     }
   }
   return ''
+}
+
+/** 把本机完整码缓存上传到服务器 SQLite，解决换浏览器/清缓存丢码 */
+async function syncLocalCacheToServer(opts?: { quiet?: boolean }) {
+  const quiet = !!opts?.quiet
+  const items: { id: number; code: string; code_prefix?: string; plan?: string }[] = []
+  const seen = new Set<string>()
+  for (const v of Object.values(codeCache.value)) {
+    const code = String(v?.code || '').trim()
+    if (!isFullCode(code) || seen.has(code)) continue
+    seen.add(code)
+    items.push({
+      id: Number(v?.id) || 0,
+      code,
+      code_prefix: v?.prefix || code.slice(0, 14),
+      plan: v?.plan || '',
+    })
+  }
+  if (!items.length) {
+    if (!quiet) dialog.toast('本机没有可同步的完整码缓存', 'info')
+    return
+  }
+  syncingCache.value = true
+  try {
+    const r = await authFetch('/api/v1/admin/cardplatform/cdks/store', {
+      method: 'POST',
+      body: JSON.stringify({ items }),
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      if (!quiet) dialog.toast(d.error || '同步失败', 'err')
+      return
+    }
+    const saved = Number(d.saved) || 0
+    if (!quiet || saved > 0) {
+      dialog.toast(`已同步到服务器：成功 ${saved}，跳过 ${d.skipped ?? 0}，失败 ${d.failed ?? 0}`, 'ok')
+    }
+    await loadList()
+  } finally {
+    syncingCache.value = false
+  }
 }
 
 function persistRecent(codes: string[], plan: string) {
@@ -463,7 +520,7 @@ async function copyText(t: string) {
 }
 
 async function copyRowCode(row: any) {
-  // 优先完整码：本机缓存 / 列表接口补全的 code / full_code
+  // 优先服务器 full_code，其次本机兜底缓存
   const code = String(row?.fullCode || extractFullCode(row) || row?.displayCode || '').trim()
   if (!code) {
     dialog.toast('无可复制内容', 'warn')
@@ -471,8 +528,7 @@ async function copyRowCode(row: any) {
   }
   const isFull = isFullCode(code)
   if (!isFull) {
-    dialog.toast('仅有前缀，完整码未在本站缓存。请在本页重新发码后复制，或从当次「发码结果」区复制。', 'warn')
-    // 仍复制前缀，避免按钮失灵
+    dialog.toast('仅有前缀：本站未存该码完整串。请在本页重新发码，或点「同步本机缓存到服务器」。', 'warn')
   }
   const ok = await copyToClipboard(code)
   if (!ok) {
@@ -556,15 +612,22 @@ async function issue() {
       recentCodes.value = []
       return
     }
-    // 本机缓存完整码，列表可展示并可点复制
+    // 浏览器兜底 + 列表以服务器为准
     rememberIssued(issued, form.plan)
     recentCodes.value = codes
     persistRecent(codes, form.plan)
     const shortOnes = codes.filter((c) => !isFullCode(c))
-    issueOk.value = shortOnes.length
+    const storedN = Number(d.stored_count)
+    const storeFail = Number(d.store_failed) || 0
+    let okMsg = shortOnes.length
       ? `成功 ${codes.length} 张，但有 ${shortOnes.length} 张长度异常，请核对`
       : `成功 ${codes.length} 张完整码（每条约 ${codes[0]?.length || '—'} 字符）`
-    dialog.toast(issueOk.value, shortOnes.length ? 'warn' : 'ok')
+    if (Number.isFinite(storedN)) {
+      okMsg += ` · 服务器已存 ${storedN}`
+      if (storeFail > 0) okMsg += `（${storeFail} 条落库失败）`
+    }
+    issueOk.value = okMsg
+    dialog.toast(issueOk.value, shortOnes.length || storeFail ? 'warn' : 'ok')
     // 发码成功后自动尝试复制全部，减少漏拷
     await copyAll(false)
     form.funding_confirmed = false
@@ -600,10 +663,12 @@ async function loadList() {
       return
     }
     const list = Array.isArray(d.list) ? d.list : []
-    // 列表若带完整 code/full_code（本站发码缓存补全），写入缓存供点选复制
+    // 服务器补全的完整码同时写入本机兜底
     rememberIssued(list, form.plan)
     rows.value = list
     total.value = d.total || 0
+    storeStats.fullOnPage = d.full_code_on_page != null ? Number(d.full_code_on_page) : null
+    storeStats.fullInStore = d.full_code_in_store != null ? Number(d.full_code_in_store) : null
   } finally {
     loadingList.value = false
   }
@@ -635,6 +700,15 @@ onMounted(async () => {
   loadCodeCache()
   loadPersistedRecent()
   await refreshAll()
+  // 若本机有历史完整码而服务器库为空，自动静默回填一次
+  const localN = Object.values(codeCache.value).filter((v) => isFullCode(v?.code || '')).length
+  if (localN > 0 && storeStats.fullInStore === 0) {
+    try {
+      await syncLocalCacheToServer({ quiet: true })
+    } catch {
+      /* ignore */
+    }
+  }
 })
 </script>
 
