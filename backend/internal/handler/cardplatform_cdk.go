@@ -865,6 +865,32 @@ func PublicCDKResultByCode(c *gin.Context) {
 	payload["cdk_code"] = bind.CDKCode
 	payload["redemption_token"] = bind.RedemptionToken
 	payload["has_session_binding"] = strings.TrimSpace(bind.SessionPayload) != ""
+
+	// 已完成的订单：从 accounthub 获取账单 URL
+	orderStatus := strAny(payload["status"])
+	if orderStatus == "" {
+		if order, ok := payload["order"].(map[string]any); ok {
+			orderStatus = strAny(order["status"])
+		}
+	}
+	if orderStatus == "completed" {
+		email := ""
+		if order, ok := payload["order"].(map[string]any); ok {
+			email = strAny(order["account_email"])
+		}
+		if email == "" {
+			email = strAny(payload["account_email"])
+		}
+		if email == "" && strings.TrimSpace(bind.SessionPayload) != "" {
+			email = extractEmailFromSession(bind.SessionPayload)
+		}
+		if email != "" {
+			if inv, err := queryAccounthubInvoices(email); err == nil {
+				payload["invoice_url"] = inv.InvoiceURL
+			}
+		}
+	}
+
 	c.JSON(st, payload)
 }
 

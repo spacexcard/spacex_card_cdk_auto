@@ -17,10 +17,12 @@ import (
 )
 
 const (
-	checkV4URL   = "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27?timezone_offset_min=-540"
-	invoicesURL  = "https://chatgpt.com/backend-api/invoices?limit=20&account_id="
-	ua           = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-	maxBodyBytes = 4 << 20
+	checkV4URL     = "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27?timezone_offset_min=-540"
+	invoicesURL    = "https://chatgpt.com/backend-api/invoices?limit=20&account_id="
+	sessionAuthURL = "https://chatgpt.com/api/auth/session"
+	ua             = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+	maxBodyBytes   = 4 << 20
+	chunkSize      = 3933
 )
 
 var (
@@ -43,6 +45,10 @@ func getClient() (tls_client.HttpClient, error) {
 }
 
 func request(method, rawURL string, headers map[string]string) (int, []byte, error) {
+	return requestWithCookies(method, rawURL, headers, nil)
+}
+
+func requestWithCookies(method, rawURL string, headers map[string]string, cookies []*fhttp.Cookie) (int, []byte, error) {
 	c, err := getClient()
 	if err != nil {
 		return 0, nil, err
@@ -53,6 +59,9 @@ func request(method, rawURL string, headers map[string]string) (int, []byte, err
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
+	}
+	for _, ck := range cookies {
+		req.AddCookie(ck)
 	}
 	resp, err := c.Do(req)
 	if err != nil {
@@ -82,6 +91,69 @@ func ParseAccessToken(raw string) (string, error) {
 		return "", fmt.Errorf("JSON 中未找到 accessToken")
 	}
 	return v, nil
+}
+
+// parseSessionToken 从 session JSON 提取 sessionToken。
+func parseSessionToken(raw string) string {
+	v := strings.TrimSpace(raw)
+	if !strings.HasPrefix(v, "{") {
+		return ""
+	}
+	var data map[string]interface{}
+	if json.Unmarshal([]byte(v), &data) != nil {
+		return ""
+	}
+	for _, k := range []string{"sessionToken", "session_token"} {
+		if t, _ := data[k].(string); strings.TrimSpace(t) != "" {
+			return strings.TrimSpace(t)
+		}
+	}
+	return ""
+}
+
+// sessionTokenCookies 把 sessionToken 转成 __Secure-next-auth.session-token cookie 数组（自动分片）。
+func sessionTokenCookies(token string) []*fhttp.Cookie {
+	base := "__Secure-next-auth.session-token"
+	if len(token) <= chunkSize {
+		return []*fhttp.Cookie{{Name: base, Value: token}}
+	}
+	var cookies []*fhttp.Cookie
+	for i, idx := 0, 0; i < len(token); i, idx = i+chunkSize, idx+1 {
+		end := i + chunkSize
+		if end > len(token) {
+			end = len(token)
+		}
+		cookies = append(cookies, &fhttp.Cookie{
+			Name:  fmt.Sprintf("%s.%d", base, idx),
+			Value: token[i:end],
+		})
+	}
+	return cookies
+}
+
+// refreshAccessToken 用 sessionToken 换取新 accessToken。
+func refreshAccessToken(sessionToken string) (string, error) {
+	cookies := sessionTokenCookies(sessionToken)
+	st, body, err := requestWithCookies(fhttp.MethodGet, sessionAuthURL, map[string]string{
+		"Accept":     "application/json",
+		"User-Agent": ua,
+		"Referer":    "https://chatgpt.com/",
+	}, cookies)
+	if err != nil {
+		return "", fmt.Errorf("刷新 session 失败: %v", err)
+	}
+	if st != 200 {
+		return "", fmt.Errorf("刷新 session 失败 HTTP %d", st)
+	}
+	var data map[string]interface{}
+	if json.Unmarshal(body, &data) != nil {
+		return "", fmt.Errorf("刷新 session 返回非 JSON")
+	}
+	token := firstString(data["accessToken"], data["access_token"])
+	if token == "" {
+		return "", fmt.Errorf("刷新 session 未返回 accessToken")
+	}
+	return token, nil
 }
 
 func asMap(v interface{}) map[string]interface{} {
@@ -137,21 +209,40 @@ type Result struct {
 	Invoices []map[string]interface{} `json:"invoices"`
 }
 
-// Check 对齐小助手 gptCheck：订阅 + invoices（含 hosted_invoice_url / invoice_pdf）
+// Check 对齐小助手 gptCheck：订阅 + invoices（含 hosted_invoice_url / invoice_pdf）。
+// 若 accessToken 已过期（403/401），自动用 sessionToken 刷新后重试一次。
 func Check(tokenInput string) (*Result, error) {
 	accessToken, err := ParseAccessToken(tokenInput)
 	if err != nil {
 		return nil, err
 	}
-	st, body, err := request(http.MethodGet, checkV4URL, map[string]string{
+
+	checkHeaders := map[string]string{
 		"Authorization": "Bearer " + accessToken,
 		"Accept":        "application/json",
 		"User-Agent":    ua,
 		"Referer":       "https://chatgpt.com/",
-	})
+	}
+	st, body, err := request(http.MethodGet, checkV4URL, checkHeaders)
 	if err != nil {
 		return nil, fmt.Errorf("请求 ChatGPT 失败: %v", err)
 	}
+
+	// accessToken 过期/无效：尝试用 sessionToken 刷新
+	if st == 401 || st == 403 {
+		sessionToken := parseSessionToken(tokenInput)
+		if sessionToken != "" {
+			if fresh, rerr := refreshAccessToken(sessionToken); rerr == nil && fresh != "" {
+				accessToken = fresh
+				checkHeaders["Authorization"] = "Bearer " + accessToken
+				st, body, err = request(http.MethodGet, checkV4URL, checkHeaders)
+				if err != nil {
+					return nil, fmt.Errorf("请求 ChatGPT 失败: %v", err)
+				}
+			}
+		}
+	}
+
 	var data map[string]interface{}
 	if err := json.Unmarshal(body, &data); err != nil {
 		return nil, fmt.Errorf("check 返回非 JSON")

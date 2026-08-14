@@ -89,7 +89,23 @@
 
           <div v-if="taskInfo.task_status === 'pending' || taskInfo.task_status === 'queued'" class="alert" style="background: var(--warn-soft); color: var(--warn); border-color: var(--warn)">{{ t('history.msgPending') }}</div>
           <div v-else-if="taskInfo.task_status === 'submitted' || taskInfo.task_status === 'running'" class="alert alert-info">{{ t('history.msgSubmitted') }}</div>
-          <div v-else-if="taskInfo.task_status === 'completed'" class="alert alert-success">{{ t('history.msgCompleted') }}</div>
+          <div v-else-if="taskInfo.task_status === 'completed'" class="alert alert-success">
+            {{ t('history.msgCompleted') }}
+            <div class="mt-3 flex flex-wrap gap-2">
+              <a
+                v-if="taskInfo.invoice_url"
+                :href="taskInfo.invoice_url"
+                target="_blank"
+                rel="noopener"
+                class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium text-white"
+                style="background: var(--primary)"
+              >查看帐单 &rarr;</a>
+              <router-link
+                :to="'/billing?cdk=' + encodeURIComponent(taskInfo.cdk_code)"
+                class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium border bd hover:bg-soft"
+              >查询完整账单</router-link>
+            </div>
+          </div>
           <div v-else-if="['failed', 'declined', 'failed_precharge', 'cancelled'].includes(taskInfo.task_status)" class="alert alert-error">{{ t('history.msgFailed') }}</div>
           <div v-else-if="taskInfo.task_status" class="alert alert-info">状态：{{ taskInfo.task_status }}</div>
         </div>
@@ -126,6 +142,7 @@ interface Task {
   created_at: string
   updated_at: string
   completed_at?: string
+  invoice_url?: string
 }
 
 function extractCardLastFour(order: any): string {
@@ -179,6 +196,7 @@ function normalizeLookup(data: any, fallbackCode: string): Task {
     created_at: order.created_at || data?.created_at || '',
     updated_at: order.updated_at || data?.updated_at || '',
     completed_at: st === 'completed' ? (order.completed_at || order.updated_at) : undefined,
+    invoice_url: data?.invoice_url || order?.invoice_url || '',
   }
 }
 

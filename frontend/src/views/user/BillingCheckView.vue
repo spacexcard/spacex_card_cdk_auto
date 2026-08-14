@@ -126,10 +126,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import LanguageToggle from '../../components/LanguageToggle.vue'
 import ThemeToggle from '../../components/ThemeToggle.vue'
 
+const route = useRoute()
 const mode = ref<'cdk' | 'session'>('cdk')
 const cdkCode = ref('')
 const tokenInput = ref('')
@@ -165,6 +167,15 @@ function formatTs(v: any) {
     return String(v)
   }
 }
+
+onMounted(() => {
+  const qcdk = String(route.query.cdk || '').trim()
+  if (qcdk) {
+    cdkCode.value = qcdk
+    mode.value = 'cdk'
+    query()
+  }
+})
 
 async function query() {
   error.value = ''
