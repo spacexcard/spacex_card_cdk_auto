@@ -148,11 +148,7 @@ func setupRoutes(r *gin.Engine) {
 			pubCDK.GET("/result-by-code", handler.PublicCDKResultByCode)
 		}
 
-		// 任务查询（首页「任务查询」）：兼容旧 recharge_tasks + 新公开兑换绑定
-		lookup := api.Group("/lookup")
-		{
-			lookup.GET("/task", handler.LookupTaskByCDK)
-		}
+		// 用户侧 GET /lookup/task 已下线
 
 		// 卡台 Webhook（须在卡台开发者页配置 https://你的域名/api/v1/webhooks/cardplatform）
 		api.POST("/webhooks/cardplatform", handler.CardPlatformWebhook)

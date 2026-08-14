@@ -124,17 +124,6 @@ type ConfirmTaskRequest struct {
 	TaskID string `json:"task_id" binding:"required"`
 }
 
-// TaskInfo represents a recharge task
-type TaskInfo struct {
-	TaskID         string `json:"task_id"`
-	CDKCode        string `json:"cdk_code"`
-	AccountEmail   string `json:"account_email,omitempty"`
-	TaskStatus     string `json:"task_status"`
-	CreatedAt      string `json:"created_at"`
-	UpdatedAt      string `json:"updated_at"`
-	CompletedAt    *string `json:"completed_at,omitempty"`
-}
-
 // BillingInfo represents billing information
 type BillingInfo struct {
 	AccountEmail       string `json:"account_email"`
@@ -551,65 +540,7 @@ func ConfirmRechargeTask(c *gin.Context) {
 	})
 }
 
-// ===== Lookup APIs =====
-
-// LookupTaskByCDK looks up a task by CDK code.
-// 新公开兑换走卡台 + cdk_session_bindings；旧 recharge_tasks 仅作兼容。
-func LookupTaskByCDK(c *gin.Context) {
-	cdkCode := strings.TrimSpace(c.Query("cdk_code"))
-	if cdkCode == "" {
-		cdkCode = strings.TrimSpace(c.Query("code"))
-	}
-	if cdkCode == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "CDK code required"})
-		return
-	}
-
-	// 1) 新链路：本站绑定 → 卡台 result
-	if bind, err := db.GetBindingByCDK(cdkCode); err == nil && bind != nil && strings.TrimSpace(bind.RedemptionToken) != "" {
-		// 复用 result-by-code 语义，但输出 HistoryView 兼容字段
-		PublicCDKResultByCode(c)
-		return
-	}
-
-	// 2) 旧表兼容
-	var task TaskInfo
-	var completedAt sql.NullTime
-	var accountEmail sql.NullString
-
-	err := db.DB.QueryRow(`
-		SELECT task_id, cdk_code, account_email, task_status, created_at, updated_at, completed_at
-		FROM recharge_tasks
-		WHERE upper(trim(cdk_code)) = upper(trim(?))
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, cdkCode).Scan(&task.TaskID, &task.CDKCode, &accountEmail, &task.TaskStatus,
-		&task.CreatedAt, &task.UpdatedAt, &completedAt)
-
-	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": "未找到该卡密的兑换记录。请确认卡密正确；公开兑换进度请到「CDK 兑换」页用同一浏览器恢复，或使用账单查询。",
-		})
-		return
-	}
-
-	if err != nil {
-		log.Printf("DB error: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "System error"})
-		return
-	}
-
-	if accountEmail.Valid {
-		task.AccountEmail = accountEmail.String
-	}
-
-	if completedAt.Valid {
-		completedAtStr := completedAt.Time.Format("2006-01-02 15:04:05")
-		task.CompletedAt = &completedAtStr
-	}
-
-	c.JSON(http.StatusOK, task)
-}
+// 用户侧 LookupTaskByCDK（GET /lookup/task）已下线
 
 // ===== Billing Tool APIs =====
 
