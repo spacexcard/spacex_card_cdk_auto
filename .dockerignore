@@ -1,0 +1,17 @@
+.git
+.github
+.vscode
+*.md
+LICENSE
+deploy/
+research/
+tmp_exports/
+tools/
+scripts/
+dist/
+node_modules/
+.push.env
+.push.env.example
+.env.local
+*.tgz
+*.bak

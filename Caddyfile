@@ -1,0 +1,16 @@
+# 将 :YOUR_DOMAIN 替换为实际域名，如 gpt66.cc
+# 若无域名，改为 :80 即可用 http://IP 访问
+:YOUR_DOMAIN {
+    encode zstd gzip
+
+    @blocked path /.env* /app.env* /.git/* /data/*
+    handle @blocked {
+        respond 404
+    }
+
+    reverse_proxy cdk:8080 {
+        header_up X-Real-IP {client_ip}
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host {host}
+    }
+}
