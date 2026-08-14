@@ -977,7 +977,7 @@ async function runPreflightRedeem(
   } catch {
     updateItem(item.id, {
       status: 'failed',
-      progressMsg: '网络异常，请用任务查询确认是否已受理',
+      progressMsg: '网络异常，请稍后重试或联系客服确认是否已受理',
       error: '网络异常',
     })
     return 'fail'
