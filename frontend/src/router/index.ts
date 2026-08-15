@@ -50,14 +50,14 @@ const routes: RouteRecordRaw[] = [
     name: 'BatchRedeem',
     component: () => import('../views/user/BatchRedeemView.vue'),
   },
-  // 已下线：用户侧「任务查询」(/history /lookup)
   {
     path: '/history',
-    redirect: '/',
+    name: 'CDKStatusLookup',
+    component: () => import('../views/user/CDKStatusView.vue'),
   },
   {
     path: '/lookup',
-    redirect: '/',
+    redirect: '/history',
   },
   {
     path: OPS_BASE,

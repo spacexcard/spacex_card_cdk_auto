@@ -1,6 +1,6 @@
 <template>
   <div class="redeem-tabs card !p-1.5 mb-6">
-    <nav class="grid grid-cols-2 sm:grid-cols-3 gap-1">
+    <nav class="grid grid-cols-2 sm:grid-cols-4 gap-1">
       <router-link
         v-for="tab in tabs"
         :key="tab.to"
@@ -25,6 +25,7 @@ const { t } = useI18n({ useScope: 'global' })
 const tabs = computed(() => [
   { to: '/recharge', label: t('redeemTabs.single') },
   { to: '/batch', label: t('redeemTabs.batch') },
+  { to: '/history', label: t('redeemTabs.lookup') },
   { to: '/billing', label: t('redeemTabs.billing') },
 ])
 

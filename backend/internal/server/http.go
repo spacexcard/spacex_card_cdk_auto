@@ -148,7 +148,13 @@ func setupRoutes(r *gin.Engine) {
 			pubCDK.GET("/result-by-code", handler.PublicCDKResultByCode)
 		}
 
-		// 用户侧 GET /lookup/task 已下线
+		// 卡密状态查询：是否已用 + 充值邮箱（不返回 token）
+		lookup := api.Group("/lookup")
+		{
+			lookup.GET("/cdk", handler.LookupCDKStatus)
+			// 兼容旧路径
+			lookup.GET("/task", handler.LookupCDKStatus)
+		}
 
 		// 卡台 Webhook（须在卡台开发者页配置 https://你的域名/api/v1/webhooks/cardplatform）
 		api.POST("/webhooks/cardplatform", handler.CardPlatformWebhook)

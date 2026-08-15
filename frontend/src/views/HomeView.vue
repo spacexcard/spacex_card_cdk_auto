@@ -29,7 +29,7 @@
       </div>
 
       <!-- Main Services -->
-      <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6 animate-slideInUp">
+      <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-6 animate-slideInUp">
         <router-link
           v-for="svc in services"
           :key="svc.to"
@@ -52,7 +52,7 @@
       <!-- Flow Section -->
       <div class="mt-20 pt-16 border-t bd">
         <h3 class="text-2xl font-bold text-ink mb-10 text-center">{{ t('home.flowTitle') }}</h3>
-        <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
+        <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
           <div v-for="flow in flows" :key="flow.title" class="space-y-4">
             <h4 class="font-bold text-ink">{{ flow.title }}</h4>
             <div class="space-y-3 text-sm text-muted">
@@ -96,7 +96,14 @@ const services = computed(() => [
     icon: '<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>',
     points: [t('home.services.batch.p1'), t('home.services.batch.p2'), t('home.services.batch.p3')],
   },
-
+  {
+    to: '/history',
+    title: t('home.services.lookup.title'),
+    en: t('home.services.lookup.en'),
+    cta: t('home.services.lookup.cta'),
+    icon: '<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>',
+    points: [t('home.services.lookup.p1'), t('home.services.lookup.p2'), t('home.services.lookup.p3')],
+  },
   {
     to: '/billing',
     title: t('home.services.billing.title'),
@@ -110,6 +117,7 @@ const services = computed(() => [
 const flows = computed(() => [
   { title: t('home.flows.submit.title'), steps: [t('home.flows.submit.s1'), t('home.flows.submit.s2'), t('home.flows.submit.s3')] },
   { title: t('home.flows.batch.title'), steps: [t('home.flows.batch.s1'), t('home.flows.batch.s2'), t('home.flows.batch.s3')] },
+  { title: t('home.flows.lookup.title'), steps: [t('home.flows.lookup.s1'), t('home.flows.lookup.s2'), t('home.flows.lookup.s3')] },
   { title: t('home.flows.billing.title'), steps: [t('home.flows.billing.s1'), t('home.flows.billing.s2'), t('home.flows.billing.s3')] },
 ])
 </script>

@@ -16,20 +16,20 @@ export default {
     services: {
       recharge: { title: '充值提交', en: 'Recharge Portal', cta: '开始充值', p1: '验证 CDK 卡密', p2: '提交 Session', p3: '确认提交申请' },
       batch: { title: '批量兑换', en: 'Batch Redeem', cta: '批量开始', p1: '批量验证 CDK', p2: '导入 Excel Session', p3: '按序配对自动提交' },
-
+      lookup: { title: '卡密查询', en: 'CDK Status', cta: '查询卡密', p1: '输入完整卡密', p2: '查看是否已使用', p3: '显示充值邮箱' },
       billing: { title: '账单查询', en: 'Billing Tool', cta: '查询账单', p1: '粘贴 Session', p2: '查询账单信息', p3: '查看订阅状态' },
     },
     flows: {
       submit: { title: '提交流程', s1: 'CDK 验证 — 匹配套餐和状态', s2: '提交 Session — 粘贴 chatgpt.com/api/auth/session 的 JSON', s3: '确认提交 — 阅读协议后确认' },
       batch: { title: '批量兑换', s1: '验证 CDK — 批量预览卡密', s2: '导入 Session — Excel/CSV 自动识别', s3: '配对提交 — 按序兑换并看进度' },
-
+      lookup: { title: '卡密查询', s1: '输入卡密 — 完整 CDK', s2: '查询状态 — 是否已使用', s3: '查看邮箱 — 充值到哪个账号' },
       billing: { title: '账单查询', s1: 'Session 输入 — 粘贴 Token', s2: '查询账单 — 点击查询后进入', s3: '账单结果 — 查询后展示' },
     },
   },
   redeemTabs: {
     single: '立即兑换',
     batch: '批量充值',
-
+    lookup: '卡密查询',
     billing: '账单查询',
   },
   batch: {
@@ -121,7 +121,7 @@ export default {
     privacy: '隐私政策',
     submitSuccessTitle: '✓ 申请已提交成功！',
     taskId: '任务ID',
-    submitSuccessHint: '请保持本页打开；处理完成后账号会自动升级，无需再查询任务。',
+    submitSuccessHint: '提交成功。可用「卡密查询」查看是否已使用及充值邮箱。',
     confirmSubmit: '确认提交',
     errInvalidCdk: 'CDK无效',
     errVerifyFailed: '验证失败',
@@ -129,6 +129,37 @@ export default {
     errConfirmFailed: '确认失败',
     errNetwork: '网络错误',
   },
+  cdkLookup: {
+    title: '卡密查询',
+    subtitle: '查询卡密是否已使用，以及充值到哪个邮箱（不查询 token）',
+    queryTitle: '输入卡密',
+    queryHint: '输入完整卡密，系统仅返回使用状态与充值邮箱，不会返回 session / token。',
+    cdkLabel: 'CDK 卡密',
+    cdkPlaceholder: 'SXC-XXXX-XXXX-XXXX-XXXX',
+    queryBtn: '查询卡密状态',
+    resultTitle: '查询结果',
+    cdkCode: '卡密',
+    useStatus: '使用状态',
+    rechargeEmail: '充值邮箱',
+    emailEmpty: '—',
+    plan: '套餐',
+    usedAt: '使用时间',
+    queryOther: '查询其他卡密',
+    msgUsed: '该卡密已使用。',
+    msgUnused: '该卡密尚未使用。',
+    msgProcessing: '该卡密兑换处理中。',
+    errNotFound: '未找到该卡密记录',
+    errNetwork: '网络错误，请重试',
+    status: {
+      unused: '未使用',
+      used: '已使用',
+      disabled: '已禁用',
+      expired: '已过期',
+      processing: '处理中',
+      unknown: '未知',
+    },
+  },
+
   dashboard: {
     title: '账单工具',
     subtitle: 'Billing Tool · 查询账号订阅和账单信息',

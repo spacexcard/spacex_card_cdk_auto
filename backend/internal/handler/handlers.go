@@ -1,11 +1,12 @@
 package handler
 
 import (
-	"crypto/sha1"
 	"crypto/md5"
 	"crypto/rand"
+	"crypto/sha1"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -540,7 +541,212 @@ func ConfirmRechargeTask(c *gin.Context) {
 	})
 }
 
-// 用户侧 LookupTaskByCDK（GET /lookup/task）已下线
+// ===== 卡密状态查询（公开）=====
+// 只返回：是否已用 + 充值邮箱（及 plan/时间）。不返回 token / session / 任务进度细节。
+
+// LookupCDKStatus GET /api/v1/lookup/cdk?code=  或兼容 ?cdk_code=
+func LookupCDKStatus(c *gin.Context) {
+	code := strings.TrimSpace(c.Query("code"))
+	if code == "" {
+		code = strings.TrimSpace(c.Query("cdk_code"))
+	}
+	code = strings.TrimSpace(code)
+	if code == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请输入卡密"})
+		return
+	}
+
+	type out struct {
+		CDKCode      string  `json:"cdk_code"`
+		Status       string  `json:"status"` // unused | used | disabled | expired | processing | unknown
+		Used         bool    `json:"used"`
+		AccountEmail string  `json:"account_email,omitempty"`
+		Plan         string  `json:"plan,omitempty"`
+		UsedAt       *string `json:"used_at,omitempty"`
+		Message      string  `json:"message"`
+	}
+	resp := out{CDKCode: code, Status: "unknown", Message: "未找到该卡密记录"}
+
+	// 1) 本站旧 cd_keys
+	var planType, keyStatus string
+	var usedAt, expiresAt sql.NullTime
+	err := db.DB.QueryRow(`
+		SELECT COALESCE(plan_type,''), COALESCE(status,''), used_at, expires_at
+		FROM cd_keys WHERE upper(trim(code)) = upper(trim(?))
+	`, code).Scan(&planType, &keyStatus, &usedAt, &expiresAt)
+	if err == nil {
+		resp.Plan = planType
+		switch strings.ToLower(keyStatus) {
+		case "used":
+			resp.Status, resp.Used = "used", true
+			resp.Message = "卡密已使用"
+		case "disabled":
+			resp.Status, resp.Used = "disabled", false
+			resp.Message = "卡密已禁用"
+		case "expired":
+			resp.Status, resp.Used = "expired", false
+			resp.Message = "卡密已过期"
+		case "active", "":
+			resp.Status, resp.Used = "unused", false
+			resp.Message = "卡密未使用"
+		default:
+			resp.Status = strings.ToLower(keyStatus)
+			resp.Message = "卡密状态：" + keyStatus
+		}
+		if expiresAt.Valid && expiresAt.Time.Before(time.Now()) && resp.Status == "unused" {
+			resp.Status, resp.Message = "expired", "卡密已过期"
+		}
+		if usedAt.Valid {
+			s := usedAt.Time.Format("2006-01-02 15:04:05")
+			resp.UsedAt = &s
+		}
+	} else if err != sql.ErrNoRows {
+		log.Printf("[lookup-cdk] cd_keys: %v", err)
+	}
+
+	// 2) 本站完整码缓存 cardplatform_cdk_codes
+	var cpStatus, cpPlan string
+	err = db.DB.QueryRow(`
+		SELECT COALESCE(status,''), COALESCE(plan,'')
+		FROM cardplatform_cdk_codes WHERE upper(trim(code)) = upper(trim(?))
+		ORDER BY created_at DESC LIMIT 1
+	`, code).Scan(&cpStatus, &cpPlan)
+	if err == nil {
+		if resp.Plan == "" {
+			resp.Plan = cpPlan
+		}
+		st := strings.ToLower(strings.TrimSpace(cpStatus))
+		if st == "" {
+			st = "unused"
+		}
+		// 缓存状态优先覆盖 unknown；used 优先于 unused
+		switch st {
+		case "used", "redeemed", "consumed":
+			resp.Status, resp.Used = "used", true
+			resp.Message = "卡密已使用"
+		case "disabled":
+			if resp.Status != "used" {
+				resp.Status, resp.Used = "disabled", false
+				resp.Message = "卡密已禁用"
+			}
+		case "unused", "active":
+			if resp.Status == "unknown" {
+				resp.Status, resp.Used = "unused", false
+				resp.Message = "卡密未使用"
+			}
+		}
+	}
+
+	// 3) 旧 recharge_tasks：取最近一单邮箱与状态
+	var taskStatus string
+	var accountEmail sql.NullString
+	var taskCompleted sql.NullTime
+	err = db.DB.QueryRow(`
+		SELECT COALESCE(task_status,''), account_email, completed_at
+		FROM recharge_tasks
+		WHERE upper(trim(cdk_code)) = upper(trim(?))
+		ORDER BY created_at DESC LIMIT 1
+	`, code).Scan(&taskStatus, &accountEmail, &taskCompleted)
+	if err == nil {
+		if accountEmail.Valid && strings.TrimSpace(accountEmail.String) != "" {
+			resp.AccountEmail = strings.TrimSpace(accountEmail.String)
+		}
+		ts := strings.ToLower(taskStatus)
+		switch ts {
+		case "completed", "success", "done":
+			resp.Status, resp.Used = "used", true
+			resp.Message = "卡密已使用"
+			if taskCompleted.Valid {
+				s := taskCompleted.Time.Format("2006-01-02 15:04:05")
+				resp.UsedAt = &s
+			}
+		case "pending", "submitted", "running", "queued", "processing":
+			if resp.Status != "used" {
+				resp.Status, resp.Used = "processing", false
+				resp.Message = "卡密兑换处理中"
+			}
+		case "failed", "declined", "cancelled":
+			// 失败不一定等于未用；若尚无 used 标记则保持原状态
+			if resp.Status == "unknown" || resp.Status == "unused" {
+				resp.Message = "存在失败记录，卡密可能仍可用或已核销，请以实际兑换结果为准"
+			}
+		}
+	}
+
+	// 4) 绑定表：有 session 可提取邮箱；有 redemption_token 可问卡台订单状态（响应中剥离 token）
+	if bind, berr := db.GetBindingByCDK(code); berr == nil && bind != nil {
+		if resp.AccountEmail == "" && strings.TrimSpace(bind.SessionPayload) != "" {
+			if em := extractEmailFromSession(bind.SessionPayload); em != "" {
+				resp.AccountEmail = em
+			}
+		}
+		if tok := strings.TrimSpace(bind.RedemptionToken); tok != "" {
+			cli := cardplatform.NewFromSettings()
+			st, raw, rerr := cli.Result(c.Request.Context(), tok, deviceFrom(c))
+			if rerr == nil && st >= 200 && st < 300 && len(raw) > 0 {
+				var payload map[string]any
+				if json.Unmarshal(raw, &payload) == nil && payload != nil {
+					orderStatus := strAny(payload["status"])
+					if orderStatus == "" {
+						if order, ok := payload["order"].(map[string]any); ok {
+							orderStatus = strAny(order["status"])
+						}
+					}
+					email := strAny(payload["account_email"])
+					if email == "" {
+						if order, ok := payload["order"].(map[string]any); ok {
+							email = strAny(order["account_email"])
+						}
+					}
+					if email != "" {
+						resp.AccountEmail = email
+					}
+					os := strings.ToLower(orderStatus)
+					switch {
+					case os == "completed" || os == "success" || os == "done" || os == "paid":
+						resp.Status, resp.Used = "used", true
+						resp.Message = "卡密已使用"
+					case os == "failed" || os == "declined" || os == "cancelled":
+						if resp.Status != "used" {
+							resp.Message = "兑换曾失败，请确认卡密是否仍可用"
+						}
+					case os != "":
+						if resp.Status != "used" {
+							resp.Status, resp.Used = "processing", false
+							resp.Message = "卡密兑换处理中"
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 有邮箱则视为至少进入过兑换
+	if resp.AccountEmail != "" && resp.Status == "unused" {
+		resp.Status, resp.Used = "used", true
+		resp.Message = "卡密已使用"
+	}
+	if resp.Status == "used" {
+		resp.Used = true
+		if resp.Message == "" || resp.Message == "未找到该卡密记录" {
+			resp.Message = "卡密已使用"
+		}
+	}
+
+	// 完全查无
+	if resp.Status == "unknown" {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error":   "未找到该卡密记录",
+			"cdk_code": code,
+			"status":  "unknown",
+			"used":    false,
+			"message": "未找到该卡密。请确认输入完整卡密。",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
 
 // ===== Billing Tool APIs =====
 

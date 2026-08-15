@@ -16,20 +16,20 @@ export default {
     services: {
       recharge: { title: 'Recharge', en: 'Recharge Portal', cta: 'Start Recharge', p1: 'Verify CDK code', p2: 'Submit session', p3: 'Confirm submission' },
       batch: { title: 'Batch Redeem', en: 'Batch Redeem', cta: 'Start Batch', p1: 'Verify CDK list', p2: 'Import Excel sessions', p3: 'Match and submit in order' },
-
+      lookup: { title: 'CDK Status', en: 'CDK Status', cta: 'Check CDK', p1: 'Enter full CDK', p2: 'See if used', p3: 'Show recharge email' },
       billing: { title: 'Billing', en: 'Billing Tool', cta: 'Check Billing', p1: 'Paste session', p2: 'Query billing info', p3: 'View subscription' },
     },
     flows: {
       submit: { title: 'Submit Flow', s1: 'Verify CDK — match plan and status', s2: 'Submit session — paste the JSON from chatgpt.com/api/auth/session', s3: 'Confirm — agree to terms and submit' },
       batch: { title: 'Batch Redeem', s1: 'Verify CDKs — batch preview', s2: 'Import sessions — Excel/CSV auto-detect', s3: 'Match & submit — redeem in order and track progress' },
-
+      lookup: { title: 'CDK Status', s1: 'Enter CDK — full code', s2: 'Check status — used or not', s3: 'See email — which account was recharged' },
       billing: { title: 'Billing Lookup', s1: 'Session input — paste your token', s2: 'Query billing — click to look up', s3: 'Result — shown after the query' },
     },
   },
   redeemTabs: {
     single: 'Redeem Now',
     batch: 'Batch Redeem',
-
+    lookup: 'CDK Status',
     billing: 'Billing',
   },
   batch: {
@@ -121,7 +121,7 @@ export default {
     privacy: 'Privacy Policy',
     submitSuccessTitle: '✓ Request submitted successfully!',
     taskId: 'Task ID',
-    submitSuccessHint: 'Keep this page open if you like. Your account upgrades when processing finishes — no separate task lookup needed.',
+    submitSuccessHint: 'Submitted. Use CDK Status to see whether the code is used and which email was recharged.',
     confirmSubmit: 'Confirm & Submit',
     errInvalidCdk: 'Invalid CDK',
     errVerifyFailed: 'Verification failed',
@@ -129,6 +129,37 @@ export default {
     errConfirmFailed: 'Confirmation failed',
     errNetwork: 'Network error',
   },
+  cdkLookup: {
+    title: 'CDK Status',
+    subtitle: 'Check whether a CDK is used and which email was recharged (no token)',
+    queryTitle: 'Enter CDK',
+    queryHint: 'Enter the full CDK. Only use-status and recharge email are returned — never session/token.',
+    cdkLabel: 'CDK Code',
+    cdkPlaceholder: 'SXC-XXXX-XXXX-XXXX-XXXX',
+    queryBtn: 'Check CDK Status',
+    resultTitle: 'Result',
+    cdkCode: 'CDK',
+    useStatus: 'Use status',
+    rechargeEmail: 'Recharge email',
+    emailEmpty: '—',
+    plan: 'Plan',
+    usedAt: 'Used at',
+    queryOther: 'Check another CDK',
+    msgUsed: 'This CDK has been used.',
+    msgUnused: 'This CDK has not been used yet.',
+    msgProcessing: 'This CDK redeem is in progress.',
+    errNotFound: 'CDK not found',
+    errNetwork: 'Network error, please retry',
+    status: {
+      unused: 'Unused',
+      used: 'Used',
+      disabled: 'Disabled',
+      expired: 'Expired',
+      processing: 'Processing',
+      unknown: 'Unknown',
+    },
+  },
+
   dashboard: {
     title: 'Billing Tool',
     subtitle: 'Billing Tool · Query account subscription and billing',
