@@ -106,9 +106,9 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 	}
 	plan := strings.TrimSpace(req.Plan)
 	switch plan {
-	case "plus", "pro_5x", "pro_20x":
+	case "go", "plus", "pro_5x", "pro_20x":
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "plan must be plus | pro_5x | pro_20x"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "plan must be go | plus | pro_5x | pro_20x"})
 		return
 	}
 	if !req.FundingConfirmed {
