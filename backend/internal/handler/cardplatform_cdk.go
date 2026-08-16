@@ -289,6 +289,11 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 		c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(b.String()))
 		return
 	}
+	noteIDs := make([]int64, 0, len(list))
+	for _, it := range list {
+		noteIDs = append(noteIDs, it.UpstreamID)
+	}
+	notes := db.MapCardplatformCDKNotes(noteIDs)
 	out := make([]gin.H, 0, len(list))
 	for _, it := range list {
 		st := it.Status
@@ -306,6 +311,7 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 			"code_prefix": it.CodePrefix, "plan": it.Plan, "status": st,
 			"fee_amount_minor": it.FeeAmountMinor, "created_at": it.CreatedAt,
 			"has_full_code": true, "stored": true,
+			"note": notes[it.UpstreamID],
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -443,7 +449,13 @@ func CardPlatformListCDKs(c *gin.Context) {
 		Code           string `json:"code,omitempty"`
 		FullCode       string `json:"full_code,omitempty"`
 		HasFullCode    bool   `json:"has_full_code"`
+		Note           string `json:"note,omitempty"`
 	}
+	ids := make([]int64, 0, len(res.List))
+	for _, it := range res.List {
+		ids = append(ids, it.ID)
+	}
+	notes := db.MapCardplatformCDKNotes(ids)
 	out := make([]rowOut, 0, len(res.List))
 	withFull := 0
 	for _, it := range res.List {
@@ -451,7 +463,7 @@ func CardPlatformListCDKs(c *gin.Context) {
 		row := rowOut{
 			ID: it.ID, Plan: it.Plan, CodePrefix: it.CodePrefix, Status: it.Status,
 			FeeAmountMinor: it.FeeAmountMinor, CreatedAt: it.CreatedAt,
-			HasFullCode: ok,
+			HasFullCode: ok, Note: notes[it.ID],
 		}
 		if ok {
 			row.Code = full
@@ -1030,4 +1042,95 @@ func looksLikeBareAccessToken(raw string) bool {
 		return false
 	}
 	return len(strings.Split(s, ".")) == 3
+}
+
+
+// CardPlatformSetCDKNote PUT /api/v1/admin/cardplatform/cdks/:id/note
+// 本站备注（不写卡台）；空 note 表示清空。
+func CardPlatformSetCDKNote(c *gin.Context) {
+	id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	var req struct {
+		Note string `json:"note"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	if err := db.SetCardplatformCDKNote(id, req.Note); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	u, _ := c.Get("username")
+	username, _ := u.(string)
+	action := "cardplatform_cdk_note_set"
+	if strings.TrimSpace(req.Note) == "" {
+		action = "cardplatform_cdk_note_clear"
+	}
+	db.WriteAudit(username, action, "id="+strconv.FormatInt(id, 10), c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"ok": true, "id": id, "note": db.GetCardplatformCDKNote(id)})
+}
+
+// CardPlatformBatchSetCDKNote POST /api/v1/admin/cardplatform/cdks/batch-note
+// body: { ids: number[], note: string }  note 为空则批量清空。
+func CardPlatformBatchSetCDKNote(c *gin.Context) {
+	var req struct {
+		IDs  []int64 `json:"ids"`
+		Note string  `json:"note"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.IDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ids 必填"})
+		return
+	}
+	if len(req.IDs) > 200 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "单次最多 200 条"})
+		return
+	}
+	okN, failed, err := db.BatchSetCardplatformCDKNotes(req.IDs, req.Note)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	u, _ := c.Get("username")
+	username, _ := u.(string)
+	cleared := strings.TrimSpace(req.Note) == ""
+	action := "cardplatform_batch_note_set"
+	if cleared {
+		action = "cardplatform_batch_note_clear"
+	}
+	db.WriteAudit(username, action,
+		"ok="+strconv.Itoa(okN)+" fail="+strconv.Itoa(len(failed)), c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{
+		"ok": true, "updated_count": okN, "failed": failed, "failed_count": len(failed),
+		"cleared": cleared, "note": strings.TrimSpace(req.Note),
+	})
+}
+
+// CardPlatformBatchClearCDKNote POST /api/v1/admin/cardplatform/cdks/batch-clear-note
+// body: { ids: number[] }
+func CardPlatformBatchClearCDKNote(c *gin.Context) {
+	var req struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.IDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ids 必填"})
+		return
+	}
+	if len(req.IDs) > 200 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "单次最多 200 条"})
+		return
+	}
+	n, err := db.ClearCardplatformCDKNotes(req.IDs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	u, _ := c.Get("username")
+	username, _ := u.(string)
+	db.WriteAudit(username, "cardplatform_batch_note_clear",
+		"cleared="+strconv.Itoa(n)+" requested="+strconv.Itoa(len(req.IDs)), c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"ok": true, "cleared_count": n, "requested": len(req.IDs)})
 }

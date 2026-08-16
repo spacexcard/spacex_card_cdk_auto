@@ -86,6 +86,13 @@ func createTables() error {
 		`CREATE INDEX IF NOT EXISTS idx_cp_cdk_upstream ON cardplatform_cdk_codes(upstream_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_cp_cdk_prefix ON cardplatform_cdk_codes(code_prefix)`,
 
+		// CDK 备注（本站维护，按卡台上游 id；不依赖完整码是否已落库）
+		`CREATE TABLE IF NOT EXISTS cardplatform_cdk_notes (
+			upstream_id INTEGER PRIMARY KEY,
+			note TEXT NOT NULL DEFAULT '',
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+
 		`CREATE TABLE IF NOT EXISTS recharge_tasks (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			task_id TEXT UNIQUE NOT NULL,
@@ -983,6 +990,140 @@ func LookupCardplatformCDKCode(upstreamID int64, prefix string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+
+// ---- CDK 备注（本站）----
+
+const maxCDKNoteLen = 200
+
+// SetCardplatformCDKNote 写入/更新备注；note 空串表示清空。
+func SetCardplatformCDKNote(upstreamID int64, note string) error {
+	if DB == nil {
+		return fmt.Errorf("db not init")
+	}
+	if upstreamID <= 0 {
+		return fmt.Errorf("invalid upstream id")
+	}
+	note = strings.TrimSpace(note)
+	if len([]rune(note)) > maxCDKNoteLen {
+		return fmt.Errorf("备注最多 %d 字", maxCDKNoteLen)
+	}
+	if note == "" {
+		_, err := DB.Exec(`DELETE FROM cardplatform_cdk_notes WHERE upstream_id = ?`, upstreamID)
+		return err
+	}
+	_, err := DB.Exec(`
+		INSERT INTO cardplatform_cdk_notes (upstream_id, note, updated_at)
+		VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(upstream_id) DO UPDATE SET
+			note = excluded.note,
+			updated_at = CURRENT_TIMESTAMP
+	`, upstreamID, note)
+	return err
+}
+
+// ClearCardplatformCDKNotes 批量清空备注。
+func ClearCardplatformCDKNotes(ids []int64) (int, error) {
+	if DB == nil {
+		return 0, fmt.Errorf("db not init")
+	}
+	n := 0
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		res, err := DB.Exec(`DELETE FROM cardplatform_cdk_notes WHERE upstream_id = ?`, id)
+		if err != nil {
+			return n, err
+		}
+		if aff, _ := res.RowsAffected(); aff > 0 {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// BatchSetCardplatformCDKNotes 批量写入同一备注；note 空则清空。
+func BatchSetCardplatformCDKNotes(ids []int64, note string) (ok int, failed []int64, err error) {
+	if DB == nil {
+		return 0, nil, fmt.Errorf("db not init")
+	}
+	note = strings.TrimSpace(note)
+	if len([]rune(note)) > maxCDKNoteLen {
+		return 0, nil, fmt.Errorf("备注最多 %d 字", maxCDKNoteLen)
+	}
+	for _, id := range ids {
+		if id <= 0 {
+			failed = append(failed, id)
+			continue
+		}
+		if e := SetCardplatformCDKNote(id, note); e != nil {
+			failed = append(failed, id)
+			continue
+		}
+		ok++
+	}
+	return ok, failed, nil
+}
+
+// GetCardplatformCDKNote 单条备注。
+func GetCardplatformCDKNote(upstreamID int64) string {
+	if DB == nil || upstreamID <= 0 {
+		return ""
+	}
+	var note string
+	_ = DB.QueryRow(`SELECT COALESCE(note,'') FROM cardplatform_cdk_notes WHERE upstream_id = ?`, upstreamID).Scan(&note)
+	return strings.TrimSpace(note)
+}
+
+// MapCardplatformCDKNotes 批量取备注 map[upstream_id]note。
+func MapCardplatformCDKNotes(ids []int64) map[int64]string {
+	out := map[int64]string{}
+	if DB == nil || len(ids) == 0 {
+		return out
+	}
+	// de-dup
+	seen := map[int64]struct{}{}
+	uniq := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniq = append(uniq, id)
+	}
+	if len(uniq) == 0 {
+		return out
+	}
+	// SQLite IN clause
+	ph := make([]string, len(uniq))
+	args := make([]any, len(uniq))
+	for i, id := range uniq {
+		ph[i] = "?"
+		args[i] = id
+	}
+	q := `SELECT upstream_id, COALESCE(note,'') FROM cardplatform_cdk_notes WHERE upstream_id IN (` + strings.Join(ph, ",") + `)`
+	rows, err := DB.Query(q, args...)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var note string
+		if err := rows.Scan(&id, &note); err != nil {
+			continue
+		}
+		note = strings.TrimSpace(note)
+		if note != "" {
+			out[id] = note
+		}
+	}
+	return out
 }
 
 // ---- 自动选卡权重配置 ----

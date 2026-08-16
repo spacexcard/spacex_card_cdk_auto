@@ -234,6 +234,25 @@
           >
             批量解除禁用 ({{ selectedEnableableIds.length }})
           </el-button>
+          <el-button
+            size="small"
+            type="primary"
+            plain
+            :loading="noting"
+            :disabled="!selectedNoteIds.length"
+            @click="batchSetNoteSelected"
+          >
+            批量备注 ({{ selectedNoteIds.length }})
+          </el-button>
+          <el-button
+            size="small"
+            plain
+            :loading="noting"
+            :disabled="!selectedHasNoteIds.length"
+            @click="batchClearNoteSelected"
+          >
+            批量去除备注 ({{ selectedHasNoteIds.length }})
+          </el-button>
           <el-button size="small" text :disabled="!selectedRows.length" @click="clearSelection">清空选择</el-button>
         </div>
 
@@ -286,8 +305,21 @@
                 <span class="mono">${{ ((row.fee_amount_minor || 0) / 100).toFixed(2) }}</span>
               </template>
             </el-table-column>
+            <el-table-column label="备注" min-width="160">
+              <template #default="{ row }">
+                <button
+                  type="button"
+                  class="note-cell"
+                  :title="row.note ? '点击编辑备注' : '点击添加备注'"
+                  @click="editNoteOne(row)"
+                >
+                  <span v-if="row.note" class="note-cell__text">{{ row.note }}</span>
+                  <span v-else class="note-cell__empty">添加备注…</span>
+                </button>
+              </template>
+            </el-table-column>
             <el-table-column prop="created_at" label="时间" min-width="140" />
-            <el-table-column label="操作" width="200" fixed="right">
+            <el-table-column label="操作" width="240" fixed="right">
               <template #default="{ row }">
                 <el-button
                   size="small"
@@ -297,6 +329,15 @@
                   @click="copyRowCode(row)"
                 >
                   复制
+                </el-button>
+                <el-button
+                  size="small"
+                  type="primary"
+                  link
+                  :disabled="!row.id"
+                  @click="editNoteOne(row)"
+                >
+                  备注
                 </el-button>
                 <el-button
                   v-if="canDisableRow(row)"
@@ -362,6 +403,7 @@ const storeStats = reactive({ fullOnPage: null as number | null, fullInStore: nu
 const syncingCache = ref(false)
 const exportingAll = ref(false)
 const disabling = ref(false)
+const noting = ref(false)
 /** stored = 本站完整码库（默认可复制导出）；upstream = 卡台状态列表 */
 const listMode = ref<'stored' | 'upstream'>('stored')
 const selectedRows = ref<any[]>([])
@@ -477,7 +519,8 @@ const selectedEnableableIds = computed(() => {
 })
 
 function rowSelectable(row: any) {
-  return !!row?.fullCode || canDisableRow(row) || canEnableRow(row)
+  const id = Number(row?.id)
+  return !!row?.fullCode || canDisableRow(row) || canEnableRow(row) || (Number.isFinite(id) && id > 0)
 }
 function onSelectionChange(rowsSel: any[]) {
   selectedRows.value = Array.isArray(rowsSel) ? rowsSel : []
@@ -697,6 +740,137 @@ async function batchEnableSelected() {
     await loadList()
   } finally {
     disabling.value = false
+  }
+}
+
+
+const selectedNoteIds = computed(() => {
+  const ids: number[] = []
+  const seen = new Set<number>()
+  for (const r of selectedRows.value) {
+    const id = Number(r?.id)
+    if (!Number.isFinite(id) || id <= 0 || seen.has(id)) continue
+    seen.add(id)
+    ids.push(id)
+  }
+  return ids
+})
+const selectedHasNoteIds = computed(() => {
+  const ids: number[] = []
+  const seen = new Set<number>()
+  for (const r of selectedRows.value) {
+    const id = Number(r?.id)
+    if (!Number.isFinite(id) || id <= 0 || seen.has(id)) continue
+    if (!String(r?.note || '').trim()) continue
+    seen.add(id)
+    ids.push(id)
+  }
+  return ids
+})
+
+async function editNoteOne(row: any) {
+  const id = Number(row?.id)
+  if (!Number.isFinite(id) || id <= 0) {
+    dialog.toast('缺少 CDK ID，无法备注', 'warn')
+    return
+  }
+  const cur = String(row?.note || '')
+  const next = await dialog.prompt('为该 CDK 填写备注（留空并确定可清空）', {
+    title: `备注 #${id}`,
+    defaultValue: cur,
+    placeholder: '最多 200 字，例如批次/客户/用途',
+    okText: '保存',
+  })
+  if (next === null || next === undefined) return
+  noting.value = true
+  try {
+    const r = await authFetch(`/api/v1/admin/cardplatform/cdks/${id}/note`, {
+      method: 'PUT',
+      body: JSON.stringify({ note: String(next) }),
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      dialog.toast(d.error || d.msg || '保存备注失败', 'err')
+      return
+    }
+    const note = String(d.note || '').trim()
+    // 本地立刻反映
+    row.note = note
+    for (const it of rows.value) {
+      if (Number(it?.id) === id) it.note = note
+    }
+    dialog.toast(note ? '备注已保存' : '备注已清空', 'ok')
+  } finally {
+    noting.value = false
+  }
+}
+
+async function batchSetNoteSelected() {
+  const ids = selectedNoteIds.value
+  if (!ids.length) {
+    dialog.toast('请先勾选要备注的 CDK', 'warn')
+    return
+  }
+  const next = await dialog.prompt(`为选中的 ${ids.length} 张 CDK 设置同一备注`, {
+    title: '批量备注',
+    defaultValue: '',
+    placeholder: '最多 200 字；若要清空请用「批量去除备注」',
+    okText: '写入备注',
+  })
+  if (next === null || next === undefined) return
+  const note = String(next).trim()
+  if (!note) {
+    dialog.toast('备注为空：请用「批量去除备注」清空，或填写内容后再提交', 'warn')
+    return
+  }
+  noting.value = true
+  try {
+    const r = await authFetch('/api/v1/admin/cardplatform/cdks/batch-note', {
+      method: 'POST',
+      body: JSON.stringify({ ids, note }),
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      dialog.toast(d.error || d.msg || '批量备注失败', 'err')
+      return
+    }
+    const nOk = Number(d.updated_count) || 0
+    const nFail = Number(d.failed_count) || 0
+    dialog.toast(`批量备注完成：成功 ${nOk}，失败 ${nFail}`, nFail ? 'warn' : 'ok')
+    await loadList()
+  } finally {
+    noting.value = false
+  }
+}
+
+async function batchClearNoteSelected() {
+  const ids = selectedHasNoteIds.value.length
+    ? selectedHasNoteIds.value
+    : selectedNoteIds.value
+  if (!ids.length) {
+    dialog.toast('请先勾选要去除备注的 CDK', 'warn')
+    return
+  }
+  const ok = await dialog.confirm(
+    `将清除选中 ${ids.length} 张 CDK 的备注，确定？`,
+    { title: '批量去除备注', okText: '清除备注', danger: true },
+  )
+  if (!ok) return
+  noting.value = true
+  try {
+    const r = await authFetch('/api/v1/admin/cardplatform/cdks/batch-clear-note', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      dialog.toast(d.error || d.msg || '批量清除失败', 'err')
+      return
+    }
+    dialog.toast(`已清除 ${d.cleared_count ?? ids.length} 条备注`, 'ok')
+    await loadList()
+  } finally {
+    noting.value = false
   }
 }
 
@@ -1210,5 +1384,30 @@ onMounted(async () => {
   align-items: center;
   gap: 6px;
   font-size: 11px;
+}
+
+.note-cell {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 2px 0;
+  cursor: pointer;
+  color: inherit;
+}
+.note-cell__text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--el-text-color-primary, #303133);
+}
+.note-cell__empty {
+  font-size: 12px;
+  color: var(--el-text-color-placeholder, #a8abb2);
 }
 </style>
