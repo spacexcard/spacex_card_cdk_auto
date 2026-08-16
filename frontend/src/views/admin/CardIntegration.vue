@@ -228,6 +228,7 @@ const presetActive = computed(() => {
 
 const planCards = computed(() => {
   const order = [
+    { key: 'go', def: 1, label: 'Go' },
     { key: 'plus', def: 1, label: 'Plus' },
     { key: 'pro_5x', def: 5, label: 'Pro 5x' },
     { key: 'pro_20x', def: 10, label: 'Pro 20x' },
