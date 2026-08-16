@@ -22,8 +22,8 @@ func NetworkEgress(c *gin.Context) {
 		"public_cdk_base":  cfg.PublicCDKBase(),
 		"api_key_configured": strings.TrimSpace(cfg.APIKey) != "",
 		"presets": []gin.H{
-			{"id": "prod", "label": "生产", "site_base": "https://spacexcard.com", "openapi": "https://spacexcard.com/openapi/v1", "cdk": "https://spacexcard.com/api/v1/cdk"},
-			{"id": "sandbox", "label": "沙盒", "site_base": "https://sandbox.spacexcard.com", "openapi": "https://sandbox.spacexcard.com/openapi/v1", "cdk": "https://sandbox.spacexcard.com/api/v1/cdk"},
+			{"id": "prod", "label": "生产", "site_base": "https://zovocard.com", "openapi": "https://zovocard.com/openapi/v1", "cdk": "https://zovocard.com/api/v1/cdk"},
+			{"id": "sandbox", "label": "沙盒", "site_base": "https://sandbox.zovocard.com", "openapi": "https://sandbox.zovocard.com/openapi/v1", "cdk": "https://sandbox.zovocard.com/api/v1/cdk"},
 		},
 	}
 	if err != nil {

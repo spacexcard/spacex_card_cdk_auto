@@ -19,7 +19,7 @@ import (
 // CardPlatformWebhook POST /api/v1/webhooks/cardplatform
 // 卡台开发者页配置的回调地址指向此处。
 // 验签：X-Signature = hex(HMAC-SHA256(webhook_secret, raw body))
-// 文档：spacexcard-openapi-zh.md §7
+// 文档：zovocard-openapi-zh.md §7
 func CardPlatformWebhook(c *gin.Context) {
 	raw, err := io.ReadAll(io.LimitReader(c.Request.Body, 1<<20))
 	if err != nil {

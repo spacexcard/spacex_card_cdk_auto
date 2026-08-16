@@ -2,8 +2,8 @@
 
 CDK(激活码/卡密)让你把 GPT 直充做成「一次性兑换码」生意:你在卡台**买 CDK**(扣服务费、授权由你名下资金承担开卡),拿到一次性码 → 分发/售卖 → 买家在**任意独立前端**输入码兑换 → 兑换时自动**消耗你的账户余额、用你名下的卡**开通订阅。前端可换多套主题、独立分发,后端始终指向卡台。
 
-- **兑换接口 Base**:`https://spacexcard.com/api/v1/cdk`(公开,无需登录,凭有效码兑换)
-- **发码/管理**:网页「开发者 · 隐藏 GPT 直充」页,或 Open API `https://spacexcard.com/openapi/v1`
+- **兑换接口 Base**:`https://zovocard.com/api/v1/cdk`(公开,无需登录,凭有效码兑换)
+- **发码/管理**:网页「开发者 · 隐藏 GPT 直充」页,或 Open API `https://zovocard.com/openapi/v1`
 - **计费**:发码时按你的账户余额扣服务费;兑换时的开卡/充值/订阅实付由你(CDK 所有者)名下资金承担,受发码时授权的资金上限约束。
 
 > 需先在网页端用 USDT 充值开通功能后,方可购买 CDK、查看并下载本文档。
@@ -88,7 +88,7 @@ CDK(激活码/卡密)让你把 GPT 直充做成「一次性兑换码」生意:�
 
 兑换前端是**纯前端**,只调用上面 4 个接口,可任意换皮、独立部署分发(不部署在卡台)。参考仓库内 `cdk-standalone/index.html`(单文件,零依赖)。
 
-- **配置后端地址**:页面读取 `?api=<base>`、`localStorage.cdk_api_base` 或内置 `CONFIGURED_BASE`,指向 `https://spacexcard.com`。
+- **配置后端地址**:页面读取 `?api=<base>`、`localStorage.cdk_api_base` 或内置 `CONFIGURED_BASE`,指向 `https://zovocard.com`。
 - **跨域**:`/api/v1/cdk/*` 已对任意来源放行(无 cookie、凭码兑换),你的前端可托管在任意域名。
 - **换主题**:色板/字体集中在 `:root` 与顶部 CSS 段,复制一份改样式即成新主题。
 

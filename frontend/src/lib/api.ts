@@ -38,7 +38,7 @@ function isLocalSessionAuthFailure(url: string, status: number, body: any): bool
     || err.includes('api key')
     || err.includes('openapi')
     || err.includes('卡台')
-    || err.includes('spacexcard')
+    || err.includes('spacexcard') || err.includes('zovocard') || err.includes('zovocard.com')
   ) {
     return false
   }

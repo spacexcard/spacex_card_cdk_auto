@@ -1,5 +1,5 @@
 // Package cardplatform 封装卡台 Open API + 公开 CDK 兑换接口。
-// 文档：docs/spacexcard-cdk-zh.md、docs/spacexcard-openapi-zh.md
+// 文档：docs/zovocard-cdk-zh.md、docs/zovocard-openapi-zh.md
 package cardplatform
 
 import (
@@ -18,11 +18,11 @@ import (
 	"github.com/tuzi/cdk-recharge-system/internal/db"
 )
 
-const defaultBase = "https://spacexcard.com"
+const defaultBase = "https://zovocard.com"
 
 // Config 从 site_settings（优先）与环境变量读取。
 type Config struct {
-	// SiteBase 如 https://spacexcard.com（不含 /openapi）
+	// SiteBase 如 https://zovocard.com（不含 /openapi）
 	SiteBase string
 	// APIKey sk_...
 	APIKey string

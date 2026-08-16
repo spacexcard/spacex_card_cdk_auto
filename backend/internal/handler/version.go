@@ -17,7 +17,7 @@ import (
 var BuildVersion = ""
 
 // 默认仓库：白标 CDK 门户公开仓
-const defaultGitHubRepo = "spacexcard/spacex_card_cdk_auto"
+const defaultGitHubRepo = "zovocard/zovo_card_cdk_auto"
 
 var (
 	versionCacheMu   sync.Mutex

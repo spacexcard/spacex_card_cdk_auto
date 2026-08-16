@@ -33,7 +33,7 @@
 
       <div class="flex flex-wrap gap-2">
         <el-button round :type="presetActive === 'prod' ? 'primary' : 'default'" @click="applyPreset('prod')">
-          生产 · spacexcard.com
+          生产 · zovocard.com
         </el-button>
         <el-button round :type="presetActive === 'sandbox' ? 'primary' : 'default'" @click="applyPreset('sandbox')">
           沙盒 · sandbox
@@ -182,8 +182,8 @@ import { authFetch } from '../../lib/api'
 import { dialog } from '../../lib/dialog'
 
 const PRESETS: Record<string, string> = {
-  prod: 'https://spacexcard.com',
-  sandbox: 'https://sandbox.spacexcard.com',
+  prod: 'https://zovocard.com',
+  sandbox: 'https://sandbox.zovocard.com',
 }
 
 const form = reactive({ card_api_base: PRESETS.prod })

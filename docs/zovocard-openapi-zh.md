@@ -2,23 +2,23 @@
 
 通過開放 API 程序化完成開卡、查卡、卡充值、退款、凍結、消費查詢等操作。所有調用按你的賬戶餘額與專屬費率計費（與網頁端一致）。
 
-- **生產 Base URL**：`https://spacexcard.com/openapi/v1`
-- **沙盒 Base URL**：`https://sandbox.spacexcard.com/openapi/v1`
+- **生產 Base URL**：`https://zovocard.com/openapi/v1`
+- **沙盒 Base URL**：`https://sandbox.zovocard.com/openapi/v1`
 - **數據格式**：請求與響應均為 `application/json`，UTF-8
 - **憑證獲取**：登錄後在「開發者」頁生成 `app_id` / `app_secret`
 
 ### 代理接入前測試
 
-新代理應先登錄 `https://sandbox.spacexcard.com`，在「開發者」頁建立一套僅用於沙盒的 API 密鑰，再用沙盒 Base URL 完成聯調。沙盒賬戶、密鑰和數據與生產完全隔離；開卡、充值、退款及交易均為模擬結果，不會請求真實發卡渠道或產生真實資金變動。
+新代理應先登錄 `https://sandbox.zovocard.com`，在「開發者」頁建立一套僅用於沙盒的 API 密鑰，再用沙盒 Base URL 完成聯調。沙盒賬戶、密鑰和數據與生產完全隔離；開卡、充值、退款及交易均為模擬結果，不會請求真實發卡渠道或產生真實資金變動。
 
 ```bash
-export SPACEXCARD_API_BASE='https://sandbox.spacexcard.com/openapi/v1'
-export SPACEXCARD_API_KEY='sk_沙盒密鑰'
+export ZOVOCARD_API_BASE='https://sandbox.zovocard.com/openapi/v1'
+export ZOVOCARD_API_KEY='sk_沙盒密鑰'
 
-curl "$SPACEXCARD_API_BASE/products" \
-  -H "X-API-Key: $SPACEXCARD_API_KEY"
-curl "$SPACEXCARD_API_BASE/balance" \
-  -H "X-API-Key: $SPACEXCARD_API_KEY"
+curl "$ZOVOCARD_API_BASE/products" \
+  -H "X-API-Key: $ZOVOCARD_API_KEY"
+curl "$ZOVOCARD_API_BASE/balance" \
+  -H "X-API-Key: $ZOVOCARD_API_KEY"
 ```
 
 沙盒驗證通過後，只需改用生產 Base URL 和單獨建立的生產密鑰。不要在沙盒中使用生產密鑰，也不要把沙盒返回的卡片或交易當作真實資產。
@@ -172,7 +172,7 @@ Idempotency-Key: 你的唯一訂單號
 
 **請求**
 ```bash
-curl https://spacexcard.com/openapi/v1/products -H "X-API-Key: sk_你的密鑰"
+curl https://zovocard.com/openapi/v1/products -H "X-API-Key: sk_你的密鑰"
 ```
 
 **響應**
@@ -220,7 +220,7 @@ curl https://spacexcard.com/openapi/v1/products -H "X-API-Key: sk_你的密鑰"
 
 **請求**
 ```bash
-curl -X POST https://spacexcard.com/openapi/v1/cards/open \
+curl -X POST https://zovocard.com/openapi/v1/cards/open \
   -H "X-API-Key: sk_你的密鑰" \
   -H "Idempotency-Key: order-20260604-001" \
   -H "Content-Type: application/json" \
@@ -265,7 +265,7 @@ curl -X POST https://spacexcard.com/openapi/v1/cards/open \
 
 **請求**
 ```bash
-curl -X POST https://spacexcard.com/openapi/v1/cards/batch-open \
+curl -X POST https://zovocard.com/openapi/v1/cards/batch-open \
   -H "X-API-Key: sk_你的密鑰" -H "Content-Type: application/json" \
   -d '{"product_code":"P5378OX","first_name":"John","last_name":"Doe","init_amount":20,"count":3}'
 ```
@@ -295,7 +295,7 @@ curl -X POST https://spacexcard.com/openapi/v1/cards/batch-open \
 **請求**
 ```bash
 # 實時餘額：加 sync=1（不加則返回更快的緩存值）
-curl "https://spacexcard.com/openapi/v1/cards?page=1&page_size=20&sync=1" -H "X-API-Key: sk_你的密鑰"
+curl "https://zovocard.com/openapi/v1/cards?page=1&page_size=20&sync=1" -H "X-API-Key: sk_你的密鑰"
 ```
 
 **響應**
@@ -351,7 +351,7 @@ curl "https://spacexcard.com/openapi/v1/cards?page=1&page_size=20&sync=1" -H "X-
 
 **請求**
 ```bash
-curl https://spacexcard.com/openapi/v1/cards/123 -H "X-API-Key: sk_你的密鑰"
+curl https://zovocard.com/openapi/v1/cards/123 -H "X-API-Key: sk_你的密鑰"
 ```
 
 **響應**
@@ -538,7 +538,7 @@ curl https://spacexcard.com/openapi/v1/cards/123 -H "X-API-Key: sk_你的密鑰"
 
 **請求**
 ```bash
-curl -X POST https://spacexcard.com/openapi/v1/cards/recharge \
+curl -X POST https://zovocard.com/openapi/v1/cards/recharge \
   -H "X-API-Key: sk_xxx" -H "Content-Type: application/json" \
   -d '{"card_id":123,"amount":50}'
 ```
@@ -565,7 +565,7 @@ curl -X POST https://spacexcard.com/openapi/v1/cards/recharge \
 
 **請求**
 ```bash
-curl -X POST https://spacexcard.com/openapi/v1/cards/refund \
+curl -X POST https://zovocard.com/openapi/v1/cards/refund \
   -H "X-API-Key: sk_xxx" -H "Content-Type: application/json" \
   -d '{"card_id":123,"amount":10}'
 ```
@@ -590,7 +590,7 @@ curl -X POST https://spacexcard.com/openapi/v1/cards/refund \
 
 **請求**
 ```bash
-curl -X POST https://spacexcard.com/openapi/v1/cards/freeze \
+curl -X POST https://zovocard.com/openapi/v1/cards/freeze \
   -H "X-API-Key: sk_xxx" -H "Content-Type: application/json" \
   -d '{"card_id":123,"freeze":true}'
 ```
@@ -610,7 +610,7 @@ curl -X POST https://spacexcard.com/openapi/v1/cards/freeze \
 
 **請求**
 ```bash
-curl -X DELETE https://spacexcard.com/openapi/v1/cards/123 -H "X-API-Key: sk_xxx"
+curl -X DELETE https://zovocard.com/openapi/v1/cards/123 -H "X-API-Key: sk_xxx"
 ```
 
 **響應**
@@ -626,7 +626,7 @@ curl -X DELETE https://spacexcard.com/openapi/v1/cards/123 -H "X-API-Key: sk_xxx
 
 **請求**
 ```bash
-curl https://spacexcard.com/openapi/v1/balance -H "X-API-Key: sk_你的密鑰"
+curl https://zovocard.com/openapi/v1/balance -H "X-API-Key: sk_你的密鑰"
 ```
 
 **響應**
@@ -811,7 +811,7 @@ VIP 達標後自動開放，不需要管理員再寫入 `gpt_direct_enabled`。�
 | `payment_currency` | string | 否 | 當前開放 API 默認 `PHP` |
 
 ```bash
-curl -X POST https://spacexcard.com/openapi/v1/gpt-direct/preflight \
+curl -X POST https://zovocard.com/openapi/v1/gpt-direct/preflight \
   -H "X-API-Key: sk_你的密鑰" \
   -H "Content-Type: application/json" \
   -d '{
@@ -870,7 +870,7 @@ curl -X POST https://spacexcard.com/openapi/v1/gpt-direct/preflight \
 | `pricing_version` | integer | 否 | 預檢時看到的價格版本；不一致會要求刷新 |
 
 ```bash
-curl -X POST https://spacexcard.com/openapi/v1/gpt-direct/orders \
+curl -X POST https://zovocard.com/openapi/v1/gpt-direct/orders \
   -H "X-API-Key: sk_你的密鑰" \
   -H "Idempotency-Key: merchant-order-20260718-001" \
   -H "Content-Type: application/json" \
