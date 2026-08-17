@@ -23,6 +23,7 @@ var secretSettingKeys = map[string]bool{
 	"webhook_secret":   true, // 卡台开发者页 whsec_…
 	"telegram_token":   true,
 	"telegram_chat_id": false,
+	// agent_swap handled specially (hash)
 }
 
 // PublicSiteConfig GET /api/v1/public/site — 用户端拉品牌/皮肤（无鉴权）
@@ -54,6 +55,7 @@ func AdminGetSettings(c *gin.Context) {
 			out[k] = v
 		}
 	}
+	out["agent_swap_password_configured"] = agentSwapPasswordConfigured()
 	c.JSON(http.StatusOK, out)
 }
 
@@ -67,6 +69,8 @@ type adminSettingsBody struct {
 	TelegramToken  *string `json:"telegram_token"`
 	TelegramChatID *string `json:"telegram_chat_id"`
 	WebhookSecret  *string `json:"webhook_secret"`
+	// 代理失败换码密码（明文一次写入，存 bcrypt；空=不改）
+	AgentSwapPassword *string `json:"agent_swap_password"`
 }
 
 // AdminPutSettings PUT /api/v1/admin/settings
@@ -119,6 +123,15 @@ func AdminPutSettings(c *gin.Context) {
 	_ = setIf("telegram_token", body.TelegramToken, 200)
 	_ = setIf("telegram_chat_id", body.TelegramChatID, 64)
 	_ = setIf("webhook_secret", body.WebhookSecret, 200)
+	if body.AgentSwapPassword != nil {
+		pw := strings.TrimSpace(*body.AgentSwapPassword)
+		if pw != "" {
+			if err := setAgentSwapPassword(pw); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+		}
+	}
 
 	auditAdmin(c, "update_settings", "site settings")
 	AdminGetSettings(c)

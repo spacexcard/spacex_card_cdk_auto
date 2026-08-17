@@ -146,6 +146,8 @@ func setupRoutes(r *gin.Engine) {
 			pubCDK.GET("/result", handler.PublicCDKResult)
 			// 刷新进度 / 任务查询：凭卡密反查本站绑定的 redemption_token
 			pubCDK.GET("/result-by-code", handler.PublicCDKResultByCode)
+			// 代理隐藏换码：密码 + 失败未扣款 CDK → 新码
+			pubCDK.POST("/exchange", handler.PublicAgentCDKExchange)
 		}
 
 		// 卡密状态查询：是否已用 + 充值邮箱（不返回 token）
@@ -217,6 +219,8 @@ func setupRoutes(r *gin.Engine) {
 			admin.PUT("/card-selection/rules", handler.AdminPutCardSelectionRules)
 			admin.GET("/card-selection/plan-status", handler.AdminGetPlanStatus)
 			admin.POST("/card-selection/sync", handler.AdminSyncPlanStatus)
+			admin.GET("/card-selection/site-policy", handler.AdminGetSiteRedeemPolicy)
+			admin.PUT("/card-selection/site-policy", handler.AdminPutSiteRedeemPolicy)
 		}
 	}
 

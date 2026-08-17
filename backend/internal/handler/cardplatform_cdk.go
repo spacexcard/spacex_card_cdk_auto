@@ -130,14 +130,49 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 		_, _ = rand.Read(b)
 		idem = "cdk-issue-" + hex.EncodeToString(b)
 	}
-	res, err := cli.IssueCDKs(c.Request.Context(), plan, req.Count, idem)
+	// 本站策略 / 选卡配置 → 发码偏好（让选卡配置真正生效）
+	var issuePrefs []cardplatform.IssueCardPref
+	policy := loadSiteRedeemPolicy()
+	if issuer, segType, segKey := resolveIssueCardPref(policy); segKey != "" || issuer != "" {
+		issuePrefs = append(issuePrefs, cardplatform.IssueCardPref{
+			Issuer: issuer, SegmentType: segType, SegmentKey: segKey,
+		})
+	} else {
+		// 未启用策略时：仍取选卡配置首条，让「选卡配置」页面保存后能影响发码
+		if rules, err := db.GetCardSelectionRules(); err == nil {
+			for _, r := range rules {
+				if !r.Enabled || strings.TrimSpace(r.PlanKey) == "" {
+					continue
+				}
+				iss := strings.ToLower(strings.TrimSpace(r.Channel))
+				if iss == "" {
+					iss = "one"
+				}
+				issuePrefs = append(issuePrefs, cardplatform.IssueCardPref{
+					Issuer: iss, SegmentType: "product", SegmentKey: strings.TrimSpace(r.PlanKey),
+				})
+				break
+			}
+		}
+	}
+	var res *cardplatform.IssueCDKResult
+	var err error
+	if len(issuePrefs) > 0 {
+		res, err = cli.IssueCDKs(c.Request.Context(), plan, req.Count, idem, issuePrefs[0])
+	} else {
+		res, err = cli.IssueCDKs(c.Request.Context(), plan, req.Count, idem)
+	}
 	if err != nil {
 		writeCardErr(c, err)
 		return
 	}
 	u, _ := c.Get("username")
 	username, _ := u.(string)
-	db.WriteAudit(username, "cardplatform_issue_cdk", "plan="+plan+" count="+strconv.Itoa(req.Count), c.ClientIP())
+	prefNote := ""
+	if len(issuePrefs) > 0 {
+		prefNote = " pref=" + issuePrefs[0].Issuer + "/" + issuePrefs[0].SegmentKey
+	}
+	db.WriteAudit(username, "cardplatform_issue_cdk", "plan="+plan+" count="+strconv.Itoa(req.Count)+prefNote, c.ClientIP())
 	// 规范化：保证前端总能拿到完整 code 字段；绝不把 code_prefix 填进 code
 	issued := make([]gin.H, 0, len(res.Issued))
 	stored, storeFailed := 0, 0
@@ -814,6 +849,13 @@ func PublicCDKRedeem(c *gin.Context) {
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 		return
+	}
+	// 本站策略：启用时默认向卡台声明 no_auto_card_switch（不依赖 ACC 换卡策略）
+	policy := loadSiteRedeemPolicy()
+	if policy.Enabled {
+		if _, exists := body["no_auto_card_switch"]; !exists {
+			body["no_auto_card_switch"] = policy.NoAutoCardSwitch
+		}
 	}
 	cli := cardplatform.NewFromSettings()
 	st, raw, err := cli.Redeem(c.Request.Context(), body, deviceFrom(c))

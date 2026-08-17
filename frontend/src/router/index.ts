@@ -59,6 +59,16 @@ const routes: RouteRecordRaw[] = [
     path: '/lookup',
     redirect: '/history',
   },
+  // 代理隐藏换码页（不进导航；管理员设密码后使用）
+  {
+    path: '/partner/swap',
+    name: 'AgentCDKSwap',
+    component: () => import('../views/user/AgentSwapView.vue'),
+  },
+  {
+    path: '/a/swap',
+    redirect: '/partner/swap',
+  },
   {
     path: OPS_BASE,
     component: () => import('../layouts/AdminLayout.vue'),

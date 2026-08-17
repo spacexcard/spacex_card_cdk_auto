@@ -161,3 +161,31 @@ func nextSyncIn(lastSync string) string {
 	}
 	return fmt.Sprintf("%dm%ds 后", int(rem.Minutes()), int(rem.Seconds())%60)
 }
+
+// AdminGetSiteRedeemPolicy GET /api/v1/admin/card-selection/site-policy
+func AdminGetSiteRedeemPolicy(c *gin.Context) {
+	p := loadSiteRedeemPolicy()
+	issuer, segType, segKey := resolveIssueCardPref(p)
+	c.JSON(http.StatusOK, gin.H{
+		"policy": p,
+		"resolved_pref": gin.H{
+			"issuer": issuer, "segment_type": segType, "segment_key": segKey,
+		},
+		"note": "启用后：发码写入 preferred 产品；兑换请求注入 no_auto_card_switch。一卡几付硬限由卡台账户容量策略执行。",
+	})
+}
+
+// AdminPutSiteRedeemPolicy PUT /api/v1/admin/card-selection/site-policy
+func AdminPutSiteRedeemPolicy(c *gin.Context) {
+	var p SiteRedeemPolicy
+	if err := c.ShouldBindJSON(&p); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+	if err := saveSiteRedeemPolicy(p); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	auditAdmin(c, "update_site_redeem_policy", fmt.Sprintf("enabled=%v no_switch=%v product=%s", p.Enabled, p.NoAutoCardSwitch, p.ProductCode))
+	AdminGetSiteRedeemPolicy(c)
+}

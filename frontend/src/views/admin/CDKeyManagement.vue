@@ -29,6 +29,23 @@
       </el-button>
     </div>
 
+    <!-- 代理换码链接（方便复制发给代理） -->
+    <div class="card !py-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div class="min-w-0">
+        <div class="text-sm font-medium text-ink">代理换码页（隐藏，可发给代理）</div>
+        <div class="text-xs text-muted mt-0.5">
+          失败且未扣款的卡密可换新码 · 需在
+          <router-link to="/ops/integration" class="text-primary underline">卡台接入</router-link>
+          设置代理密码
+        </div>
+        <div class="mono text-sm text-ink mt-1 break-all">{{ agentSwapUrl }}</div>
+      </div>
+      <div class="flex flex-wrap gap-2 shrink-0">
+        <el-button type="primary" size="small" @click="copyText(agentSwapUrl)">复制链接</el-button>
+        <el-button size="small" @click="openAgentSwap">打开</el-button>
+      </div>
+    </div>
+
     <div v-if="metaError" class="alert alert-error">{{ metaError }}</div>
 
     <!-- 价格卡片：可点选套餐 -->
@@ -395,6 +412,9 @@ const RECENT_KEY = 'cdk_recent_issued_v1'
 const CODE_CACHE_KEY = 'cdk_full_code_cache_v1'
 /** 卡台完整码形如 GPTD-xxxxxxxxxxxx-xxxxxxxxxxxx-xxxxxxxxxxxx（约 43 字符） */
 const FULL_CODE_MIN_LEN = 20
+/** 代理换码隐藏页（完整 URL，便于复制发给代理） */
+const agentSwapUrl =
+  typeof window !== 'undefined' ? `${window.location.origin}/partner/swap` : '/partner/swap'
 
 type CodeCacheEntry = { code: string; plan?: string; prefix?: string; at?: number; id?: number }
 /** id -> entry；prefix -> entry（仅作兜底 / 回填服务器） */
@@ -1083,6 +1103,10 @@ function clearRecent() {
     /* ignore */
   }
   dialog.toast('已清除本批完整码缓存', 'info')
+}
+
+function openAgentSwap() {
+  window.open(agentSwapUrl, '_blank')
 }
 
 async function copyText(t: string) {

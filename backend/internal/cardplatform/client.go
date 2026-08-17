@@ -277,6 +277,17 @@ type IssueCDKRequest struct {
 	Plan             string `json:"plan"`
 	Count            int    `json:"count"`
 	FundingConfirmed bool   `json:"funding_confirmed"`
+	// 兑换选卡偏好：写入卡台 CDK，兑换时优先用该产品/渠道
+	PreferredIssuer      string `json:"preferred_issuer,omitempty"`
+	PreferredSegmentType string `json:"preferred_segment_type,omitempty"`
+	PreferredSegmentKey  string `json:"preferred_segment_key,omitempty"`
+}
+
+// IssueCardPref 发码时的选卡偏好。
+type IssueCardPref struct {
+	Issuer      string
+	SegmentType string
+	SegmentKey  string
 }
 
 type IssuedCDK struct {
@@ -381,7 +392,7 @@ func (c *Client) BatchEnableCDKs(ctx context.Context, ids []int64) (*BatchEnable
 }
 
 // IssueCDKs POST /gpt-direct/cdks
-func (c *Client) IssueCDKs(ctx context.Context, plan string, count int, idem string) (*IssueCDKResult, error) {
+func (c *Client) IssueCDKs(ctx context.Context, plan string, count int, idem string, pref ...IssueCardPref) (*IssueCDKResult, error) {
 	if count < 1 {
 		count = 1
 	}
@@ -389,6 +400,14 @@ func (c *Client) IssueCDKs(ctx context.Context, plan string, count int, idem str
 		count = 50
 	}
 	body := IssueCDKRequest{Plan: plan, Count: count, FundingConfirmed: true}
+	if len(pref) > 0 {
+		body.PreferredIssuer = strings.TrimSpace(pref[0].Issuer)
+		body.PreferredSegmentType = strings.TrimSpace(pref[0].SegmentType)
+		body.PreferredSegmentKey = strings.TrimSpace(pref[0].SegmentKey)
+		if body.PreferredSegmentKey != "" && body.PreferredSegmentType == "" {
+			body.PreferredSegmentType = "product"
+		}
+	}
 	data, err := c.doOpenAPI(ctx, http.MethodPost, "/gpt-direct/cdks", body, idem)
 	if err != nil {
 		return nil, err

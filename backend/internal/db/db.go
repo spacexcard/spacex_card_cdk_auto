@@ -172,6 +172,22 @@ func createTables() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_cdk_bind_token ON cdk_session_bindings(redemption_token)`,
 
+		// 代理失败换码日志（旧码 → 新码，仅未扣款失败）
+		`CREATE TABLE IF NOT EXISTS agent_cdk_exchanges (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			old_code_hash TEXT NOT NULL,
+			old_upstream_id INTEGER,
+			new_upstream_id INTEGER,
+			old_code_prefix TEXT,
+			new_code_prefix TEXT,
+			plan TEXT,
+			order_id INTEGER,
+			order_status TEXT,
+			ip TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_ex_old_hash ON agent_cdk_exchanges(old_code_hash)`,
+
 		// 自动选卡权重规则（管理员可配置优先级）
 		`CREATE TABLE IF NOT EXISTS card_selection_rules (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1124,6 +1140,57 @@ func MapCardplatformCDKNotes(ids []int64) map[int64]string {
 		}
 	}
 	return out
+}
+
+
+
+// ---- 代理失败换码 ----
+
+func HashCDKCode(code string) string {
+	code = strings.ToUpper(strings.TrimSpace(code))
+	sum := sha256.Sum256([]byte(code))
+	return hex.EncodeToString(sum[:])
+}
+
+// LookupStoredCDKByCode 按完整码查本站缓存。
+func LookupStoredCDKByCode(code string) (upstreamID int64, plan, prefix, status string, ok bool) {
+	if DB == nil {
+		return 0, "", "", "", false
+	}
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return 0, "", "", "", false
+	}
+	err := DB.QueryRow(`
+		SELECT COALESCE(upstream_id,0), COALESCE(plan,''), COALESCE(code_prefix,''), COALESCE(status,'')
+		FROM cardplatform_cdk_codes WHERE upper(trim(code)) = upper(trim(?))
+		ORDER BY created_at DESC LIMIT 1
+	`, code).Scan(&upstreamID, &plan, &prefix, &status)
+	if err != nil {
+		return 0, "", "", "", false
+	}
+	return upstreamID, plan, prefix, status, true
+}
+
+func AgentCDKAlreadyExchanged(codeHash string) bool {
+	if DB == nil || codeHash == "" {
+		return false
+	}
+	var n int
+	_ = DB.QueryRow(`SELECT COUNT(*) FROM agent_cdk_exchanges WHERE old_code_hash = ?`, codeHash).Scan(&n)
+	return n > 0
+}
+
+func RecordAgentCDKExchange(oldHash string, oldID, newID int64, oldPrefix, newPrefix, plan string, orderID int64, orderStatus, ip string) error {
+	if DB == nil {
+		return fmt.Errorf("db not init")
+	}
+	_, err := DB.Exec(`
+		INSERT INTO agent_cdk_exchanges
+		(old_code_hash, old_upstream_id, new_upstream_id, old_code_prefix, new_code_prefix, plan, order_id, order_status, ip, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+	`, oldHash, oldID, newID, oldPrefix, newPrefix, plan, orderID, orderStatus, ip)
+	return err
 }
 
 // ---- 自动选卡权重配置 ----

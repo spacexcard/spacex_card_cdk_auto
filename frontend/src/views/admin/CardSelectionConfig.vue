@@ -118,6 +118,74 @@
       </div>
     </div>
 
+
+    <!-- 本站可控策略 -->
+    <div class="card">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <div>
+          <h2 class="text-xl font-bold text-ink">本站可控策略</h2>
+          <p class="text-sm text-muted mt-1">
+            不依赖 ACC 换卡策略：启用后发码写入选卡偏好，兑换向卡台声明
+            <code class="mono text-xs">no_auto_card_switch</code>（失败不自动换卡，由本站/卡台容量策略控卡）
+          </p>
+          <p v-if="resolvedPref.segment_key" class="text-xs text-subtle mt-1">
+            当前生效偏好：{{ resolvedPref.issuer || '—' }} / {{ resolvedPref.segment_key }}
+          </p>
+        </div>
+        <div class="flex items-center gap-3">
+          <span class="text-sm text-muted">{{ policy.enabled ? '已启用本站策略' : '保持关闭' }}</span>
+          <el-switch v-model="policy.enabled" active-text="启用本站兑换策略" />
+        </div>
+      </div>
+
+      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div>
+          <div class="text-xs text-muted mb-1">每卡新账号上限（展示）</div>
+          <el-input-number v-model="policy.max_new_accounts_per_card" :min="1" :max="50" class="!w-full" />
+        </div>
+        <div>
+          <div class="text-xs text-muted mb-1">单任务最多卡数（预留）</div>
+          <el-input-number v-model="policy.max_cards_per_task" :min="1" :max="20" class="!w-full" />
+        </div>
+        <div>
+          <div class="text-xs text-muted mb-1">失败冷却（小时，预留）</div>
+          <el-input-number v-model="policy.fail_cooldown_hours" :min="0" :max="168" class="!w-full" />
+        </div>
+        <div>
+          <div class="text-xs text-muted mb-1">限定发卡地区</div>
+          <el-input v-model="policy.issuing_area" placeholder="United States" />
+        </div>
+        <div>
+          <div class="text-xs text-muted mb-1">持卡人名</div>
+          <el-input v-model="policy.holder_first" placeholder="GPT" />
+        </div>
+        <div>
+          <div class="text-xs text-muted mb-1">持卡人姓</div>
+          <el-input v-model="policy.holder_last" placeholder="Direct" />
+        </div>
+        <div class="sm:col-span-2">
+          <div class="text-xs text-muted mb-1">指定产品码（留空=用下方选卡优先级第一条）</div>
+          <el-input v-model="policy.product_code" placeholder="留空自动最低成本/优先级产品" clearable />
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-4 mt-4">
+        <el-checkbox v-model="autoSwitchUnpaid" :disabled="!policy.enabled">
+          确认未扣款/失败后自动换卡（关闭=发 no_auto_card_switch）
+        </el-checkbox>
+        <el-switch
+          v-model="policy.auto_open_when_no_card"
+          :disabled="!policy.enabled"
+          active-text="无合格卡时自动开卡"
+        />
+        <el-button type="primary" :loading="policySaving" @click="savePolicy">保存策略</el-button>
+      </div>
+      <p class="text-xs text-subtle mt-3">
+        说明：一卡几付的硬上限由<strong>卡台账户容量</strong>执行；本站负责「用哪张产品偏好」与「是否允许卡台自动换卡」。
+        保存选卡优先级后，新发码会写入 preferred；已发出的旧码仍按发码时偏好（失效则回落卡台默认）。
+      </p>
+    </div>
+
     <!-- 添加产品弹窗 -->
     <el-dialog v-model="showAddDialog" title="添加产品到优先级" width="480px" align-center destroy-on-close>
       <div class="space-y-3">
@@ -152,7 +220,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { authFetch } from '../../lib/api'
 import { dialog } from '../../lib/dialog'
 
@@ -350,8 +418,60 @@ function removeRule(idx: number) {
   rules.value.splice(idx, 1)
 }
 
+
+async function loadPolicy() {
+  try {
+    const r = await authFetch('/api/v1/admin/card-selection/site-policy')
+    if (!r.ok) return
+    const d = await r.json().catch(() => ({}))
+    const p = d.policy || {}
+    Object.assign(policy, {
+      enabled: !!p.enabled,
+      no_auto_card_switch: p.no_auto_card_switch !== false,
+      auto_open_when_no_card: p.auto_open_when_no_card !== false,
+      max_new_accounts_per_card: Number(p.max_new_accounts_per_card) || 4,
+      max_cards_per_task: Number(p.max_cards_per_task) || 3,
+      fail_cooldown_hours: Number(p.fail_cooldown_hours) || 24,
+      issuing_area: p.issuing_area || 'United States',
+      holder_first: p.holder_first || 'GPT',
+      holder_last: p.holder_last || 'Direct',
+      product_code: p.product_code || '',
+      issuer: p.issuer || '',
+    })
+    autoSwitchUnpaid.value = !policy.no_auto_card_switch
+    const rp = d.resolved_pref || {}
+    resolvedPref.issuer = rp.issuer || ''
+    resolvedPref.segment_type = rp.segment_type || ''
+    resolvedPref.segment_key = rp.segment_key || ''
+  } catch { /* ignore */ }
+}
+
+async function savePolicy() {
+  policySaving.value = true
+  try {
+    const r = await authFetch('/api/v1/admin/card-selection/site-policy', {
+      method: 'PUT',
+      body: JSON.stringify({ ...policy }),
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      dialog.toast(d.error || '保存策略失败', 'err')
+      return
+    }
+    const p = d.policy || {}
+    Object.assign(policy, p)
+    const rp = d.resolved_pref || {}
+    resolvedPref.issuer = rp.issuer || ''
+    resolvedPref.segment_type = rp.segment_type || ''
+    resolvedPref.segment_key = rp.segment_key || ''
+    dialog.toast('策略已保存（新发码/新兑换生效）', 'ok')
+  } finally {
+    policySaving.value = false
+  }
+}
+
 onMounted(async () => {
-  await Promise.all([loadRules(), loadPlanStatus()])
+  await Promise.all([loadRules(), loadPlanStatus(), loadPolicy()])
   pollTimer = setInterval(loadPlanStatus, 3 * 60 * 1000)
 })
 onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })

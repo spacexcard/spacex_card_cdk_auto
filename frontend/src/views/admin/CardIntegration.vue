@@ -66,6 +66,32 @@
             autocomplete="off"
           />
         </el-form-item>
+        <el-form-item label="代理换码密码">
+          <el-input
+            v-model="secrets.agent_swap_password"
+            type="password"
+            show-password
+            clearable
+            size="large"
+            :placeholder="swapPwHint"
+            autocomplete="off"
+          />
+          <p class="text-xs text-subtle mt-1">
+            代理凭此密码进入隐藏页，将<strong>失败且未扣款</strong>的 CDK 换一张新码。留空保存=不修改；
+            <el-tag v-if="hints.agent_swap_password_configured" size="small" type="success" effect="plain">已设置</el-tag>
+            <el-tag v-else size="small" type="info" effect="plain">未设置</el-tag>
+          </p>
+        </el-form-item>
+        <el-form-item label="发给代理的换码链接（可复制）">
+          <div class="flex flex-wrap items-center gap-2 w-full">
+            <el-input :model-value="agentSwapUrl" readonly size="large" class="!flex-1 mono" />
+            <el-button type="primary" size="large" @click="copyText(agentSwapUrl)">复制链接</el-button>
+            <el-button size="large" @click="window.open(agentSwapUrl, '_blank')">打开</el-button>
+          </div>
+          <p class="text-xs text-subtle mt-1">
+            路径固定 <code class="mono">/partner/swap</code>（短链 <code class="mono">/a/swap</code>）。导航栏不展示，把完整链接 + 密码发给代理即可。
+          </p>
+        </el-form-item>
         <div class="flex flex-wrap gap-2">
           <el-button type="primary" size="large" :loading="saving" @click="save">保存</el-button>
           <el-button type="success" size="large" plain :loading="busy" @click="runAllChecks">
@@ -187,7 +213,7 @@ const PRESETS: Record<string, string> = {
 }
 
 const form = reactive({ card_api_base: PRESETS.prod })
-const secrets = reactive({ card_api_key: '' })
+const secrets = reactive({ card_api_key: '', agent_swap_password: '' })
 const hints = reactive<Record<string, any>>({})
 const saving = ref(false)
 const busy = ref(false)
@@ -211,6 +237,13 @@ const dlgPlans = ref(false)
 const keyHint = computed(() =>
   hints.card_api_key_configured ? `已配置 ${hints.card_api_key_hint || ''}`.trim() : '粘贴 sk_…',
 )
+const swapPwHint = computed(() =>
+  hints.agent_swap_password_configured ? '已设置（留空保存不修改）' : '设置代理换码密码（至少 6 位）',
+)
+const agentSwapUrl = computed(() => {
+  if (typeof window === 'undefined') return '/partner/swap'
+  return `${window.location.origin}/partner/swap`
+})
 
 const siteRoot = computed(() => {
   let b = (form.card_api_base || '').trim().replace(/\/+$/, '')
@@ -299,6 +332,7 @@ async function save() {
     normalizeBase()
     const body: Record<string, string> = { card_api_base: form.card_api_base.trim() }
     if (secrets.card_api_key.trim()) body.card_api_key = secrets.card_api_key.trim()
+    if (secrets.agent_swap_password.trim()) body.agent_swap_password = secrets.agent_swap_password.trim()
     const r = await authFetch('/api/v1/admin/settings', { method: 'PUT', body: JSON.stringify(body) })
     const d = await r.json().catch(() => ({}))
     if (!r.ok) {
@@ -307,6 +341,7 @@ async function save() {
     }
     Object.assign(hints, d)
     secrets.card_api_key = ''
+    secrets.agent_swap_password = ''
     dialog.toast('已保存', 'ok')
     return true
   } finally {
