@@ -71,6 +71,10 @@ func CardPlatformWebhook(c *gin.Context) {
 			db.WriteAudit("webhook", "gpt_direct.completed", idem, c.ClientIP())
 		}
 	}
+	// 卡健康：失败/成功终态观察（同卡多邮箱失败 → 拉黑并冻结）
+	if strings.HasPrefix(strings.ToLower(eventType), "gpt_direct.") {
+		observeFromWebhookPayload(payload)
+	}
 	c.Status(http.StatusOK)
 }
 

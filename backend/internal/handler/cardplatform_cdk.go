@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -879,6 +880,17 @@ func PublicCDKResult(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
+	// 卡健康观察（best-effort，不阻断用户）
+	if st >= 200 && st < 300 {
+		var payload map[string]any
+		if json.Unmarshal(raw, &payload) == nil {
+			cdkCode := ""
+			if found, err := db.FindCodeByRedemptionToken(token); err == nil {
+				cdkCode = found
+			}
+			go observeFromPublicResult(context.Background(), payload, cdkCode)
+		}
+	}
 	proxyPublicJSON(c, st, raw)
 }
 
@@ -919,6 +931,11 @@ func PublicCDKResultByCode(c *gin.Context) {
 	payload["cdk_code"] = bind.CDKCode
 	payload["redemption_token"] = bind.RedemptionToken
 	payload["has_session_binding"] = strings.TrimSpace(bind.SessionPayload) != ""
+
+	// 卡健康观察（webhook 未配时靠轮询学）
+	if st >= 200 && st < 300 {
+		go observeFromPublicResult(context.Background(), payload, bind.CDKCode)
+	}
 
 	// 已完成的订单：从 accounthub 获取账单 URL
 	orderStatus := strAny(payload["status"])

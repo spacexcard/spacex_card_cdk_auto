@@ -634,6 +634,18 @@ func (c *Client) DeleteCard(ctx context.Context, cardID string) (json.RawMessage
 	return c.doOpenAPI(ctx, http.MethodDelete, "/cards/"+url.PathEscape(cardID), nil, "")
 }
 
+// FreezeCard POST /cards/freeze — 冻结/解冻名下卡（冻结后卡台自动选卡不再选用 ACTIVE 以外的卡）。
+func (c *Client) FreezeCard(ctx context.Context, cardID int64, freeze bool) error {
+	if cardID <= 0 {
+		return &APIError{HTTPStatus: 400, Msg: "card id required"}
+	}
+	_, err := c.doOpenAPI(ctx, http.MethodPost, "/cards/freeze", map[string]any{
+		"card_id": cardID,
+		"freeze":  freeze,
+	}, "")
+	return err
+}
+
 // ---- 公开兑换（无需 API Key）----
 
 func (c *Client) doPublicCDK(ctx context.Context, method, path string, body any, device string) (int, json.RawMessage, error) {

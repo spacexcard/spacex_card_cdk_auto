@@ -186,6 +186,93 @@
       </p>
     </div>
 
+    <!-- 卡健康：同卡失败 × 邮箱归因 -->
+    <div class="card">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <div>
+          <h2 class="text-xl font-bold text-ink">卡健康（失败归因）</h2>
+          <p class="text-sm text-muted mt-1">
+            本站观察充值失败：同一张卡失败达到阈值后——
+            <strong>不同邮箱</strong>判为卡问题（拉黑并冻结，下次自动选卡跳过）；
+            <strong>同一邮箱</strong>判为邮箱/号问题（不冻卡）。
+          </p>
+        </div>
+        <div class="flex items-center gap-3">
+          <el-switch v-model="healthPolicy.enabled" active-text="启用" />
+          <el-button type="primary" :loading="healthSaving" @click="saveHealthPolicy">保存</el-button>
+          <el-button :loading="healthLoading" plain @click="loadHealth">刷新</el-button>
+        </div>
+      </div>
+
+      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 mb-4">
+        <div>
+          <div class="text-xs text-muted mb-1">失败次数阈值</div>
+          <el-input-number v-model="healthPolicy.fail_threshold" :min="1" :max="10" class="!w-full" />
+        </div>
+        <div class="flex items-end pb-1">
+          <el-checkbox v-model="healthPolicy.freeze_on_block">判定坏卡后自动冻结（卡台）</el-checkbox>
+        </div>
+        <div class="flex items-end pb-1">
+          <el-checkbox v-model="healthPolicy.require_known_email">无邮箱时不拉黑（推荐）</el-checkbox>
+        </div>
+      </div>
+
+      <div class="mb-4">
+        <h3 class="text-sm font-semibold text-ink mb-2">已拉黑的卡</h3>
+        <div v-if="!blocklist.length" class="text-sm text-muted py-2">暂无</div>
+        <div v-else class="space-y-2">
+          <div
+            v-for="b in blocklist"
+            :key="b.card_id"
+            class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line/60 px-3 py-2 text-sm"
+          >
+            <div>
+              <span class="mono font-medium">#{{ b.card_id }}</span>
+              <span v-if="b.card_last_four" class="mono text-muted ml-2">****{{ b.card_last_four }}</span>
+              <el-tag size="small" class="ml-2" type="danger">{{ b.reason }}</el-tag>
+              <span class="text-muted ml-2">失败 {{ b.fail_count }} · 邮箱 {{ b.distinct_emails }}</span>
+              <span class="text-subtle ml-2">冻:{{ b.freeze_status || '—' }}</span>
+            </div>
+            <el-button size="small" type="warning" plain @click="unblockCard(b.card_id)">解禁并解冻</el-button>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <h3 class="text-sm font-semibold text-ink mb-2">最近失败观察</h3>
+        <div v-if="!failEvents.length" class="text-sm text-muted py-2">暂无（需 Webhook 或用户轮询 result）</div>
+        <div v-else class="overflow-x-auto">
+          <table class="w-full text-xs text-left">
+            <thead class="text-muted border-b border-line/50">
+              <tr>
+                <th class="py-1 pr-2">时间</th>
+                <th class="py-1 pr-2">卡</th>
+                <th class="py-1 pr-2">订单</th>
+                <th class="py-1 pr-2">邮箱</th>
+                <th class="py-1 pr-2">判定</th>
+                <th class="py-1 pr-2">状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="e in failEvents" :key="e.id" class="border-b border-line/30">
+                <td class="py-1 pr-2 mono whitespace-nowrap">{{ e.created_at }}</td>
+                <td class="py-1 pr-2 mono">#{{ e.card_id }}{{ e.card_last_four ? ' ·' + e.card_last_four : '' }}</td>
+                <td class="py-1 pr-2 mono">{{ e.order_id || '—' }}</td>
+                <td class="py-1 pr-2 mono">{{ e.account_email_norm }}</td>
+                <td class="py-1 pr-2">
+                  <el-tag
+                    size="small"
+                    :type="e.verdict === 'card_suspect' ? 'danger' : e.verdict === 'email_suspect' ? 'warning' : 'info'"
+                  >{{ verdictLabel(e.verdict) }}</el-tag>
+                </td>
+                <td class="py-1 pr-2">{{ e.order_status }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
     <!-- 添加产品弹窗 -->
     <el-dialog v-model="showAddDialog" title="添加产品到优先级" width="480px" align-center destroy-on-close>
       <div class="space-y-3">
@@ -470,8 +557,84 @@ async function savePolicy() {
   }
 }
 
+// ---- 卡健康 ----
+const healthPolicy = reactive({
+  enabled: true,
+  fail_threshold: 2,
+  freeze_on_block: true,
+  require_known_email: true,
+})
+const healthSaving = ref(false)
+const healthLoading = ref(false)
+const blocklist = ref<any[]>([])
+const failEvents = ref<any[]>([])
+
+function verdictLabel(v: string) {
+  const m: Record<string, string> = {
+    card_suspect: '卡问题',
+    email_suspect: '邮箱/号问题',
+    need_more: '次数不足',
+    unknown_emails: '缺邮箱',
+    already_blocked: '已拉黑',
+  }
+  return m[v] || v || '—'
+}
+
+async function loadHealth() {
+  healthLoading.value = true
+  try {
+    const r = await authFetch('/api/v1/admin/card-health')
+    if (!r.ok) return
+    const d = await r.json().catch(() => ({}))
+    const p = d.policy || {}
+    Object.assign(healthPolicy, {
+      enabled: p.enabled !== false,
+      fail_threshold: Number(p.fail_threshold) || 2,
+      freeze_on_block: p.freeze_on_block !== false,
+      require_known_email: p.require_known_email !== false,
+    })
+    blocklist.value = Array.isArray(d.blocklist) ? d.blocklist.filter((b: any) => b.active !== false) : []
+    failEvents.value = Array.isArray(d.events) ? d.events : []
+  } finally {
+    healthLoading.value = false
+  }
+}
+
+async function saveHealthPolicy() {
+  healthSaving.value = true
+  try {
+    const r = await authFetch('/api/v1/admin/card-health/policy', {
+      method: 'PUT',
+      body: JSON.stringify({ ...healthPolicy }),
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      dialog.toast(d.error || '保存失败', 'err')
+      return
+    }
+    if (d.policy) Object.assign(healthPolicy, d.policy)
+    dialog.toast('卡健康策略已保存', 'ok')
+  } finally {
+    healthSaving.value = false
+  }
+}
+
+async function unblockCard(cardId: number) {
+  const r = await authFetch('/api/v1/admin/card-health/unblock', {
+    method: 'POST',
+    body: JSON.stringify({ card_id: cardId, unfreeze: true }),
+  })
+  const d = await r.json().catch(() => ({}))
+  if (!r.ok) {
+    dialog.toast(d.error || '解禁失败', 'err')
+    return
+  }
+  dialog.toast('已解禁' + (d.unfreeze ? `（${d.unfreeze}）` : ''), 'ok')
+  await loadHealth()
+}
+
 onMounted(async () => {
-  await Promise.all([loadRules(), loadPlanStatus(), loadPolicy()])
+  await Promise.all([loadRules(), loadPlanStatus(), loadPolicy(), loadHealth()])
   pollTimer = setInterval(loadPlanStatus, 3 * 60 * 1000)
 })
 onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })

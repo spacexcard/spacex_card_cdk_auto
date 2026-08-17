@@ -221,6 +221,13 @@ func setupRoutes(r *gin.Engine) {
 			admin.POST("/card-selection/sync", handler.AdminSyncPlanStatus)
 			admin.GET("/card-selection/site-policy", handler.AdminGetSiteRedeemPolicy)
 			admin.PUT("/card-selection/site-policy", handler.AdminPutSiteRedeemPolicy)
+
+			// 卡健康：同卡失败 × 邮箱归因 → 坏卡冻结
+			admin.GET("/card-health", handler.AdminListCardHealth)
+			admin.GET("/card-health/policy", handler.AdminGetCardHealthPolicy)
+			admin.PUT("/card-health/policy", handler.AdminPutCardHealthPolicy)
+			admin.POST("/card-health/unblock", handler.AdminUnblockCard)
+			admin.POST("/card-health/observe", handler.AdminReobserveCardOrder)
 		}
 	}
 

@@ -209,6 +209,39 @@ func createTables() error {
 			synced_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 
+		// 卡健康：充值失败事件（按卡 + 邮箱归因）
+		`CREATE TABLE IF NOT EXISTS card_fail_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			card_id INTEGER NOT NULL,
+			card_last_four TEXT DEFAULT '',
+			order_id INTEGER NOT NULL DEFAULT 0,
+			cdk_code TEXT DEFAULT '',
+			account_email_norm TEXT NOT NULL DEFAULT '',
+			email_source TEXT DEFAULT '',
+			error_code TEXT DEFAULT '',
+			order_status TEXT DEFAULT '',
+			verdict TEXT DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(order_id, card_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_card_fail_card ON card_fail_events(card_id, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_card_fail_email ON card_fail_events(account_email_norm)`,
+
+		// 卡健康：本站认定的坏卡（多邮箱失败）
+		`CREATE TABLE IF NOT EXISTS card_blocklist (
+			card_id INTEGER PRIMARY KEY,
+			card_last_four TEXT DEFAULT '',
+			reason TEXT NOT NULL DEFAULT '',
+			distinct_emails INTEGER NOT NULL DEFAULT 0,
+			fail_count INTEGER NOT NULL DEFAULT 0,
+			freeze_status TEXT DEFAULT '',
+			freeze_error TEXT DEFAULT '',
+			blocked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			unblocked_at DATETIME,
+			notes TEXT DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_card_block_active ON card_blocklist(blocked_at) WHERE unblocked_at IS NULL`,
+
 		// 卡台实体产品缓存（/openapi/v1/products 同步，product_code 唯一）
 		`CREATE TABLE IF NOT EXISTS card_product_cache (
 			product_code TEXT PRIMARY KEY,
