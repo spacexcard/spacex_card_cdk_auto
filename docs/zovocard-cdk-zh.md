@@ -1,4 +1,4 @@
-# SpaceX Card · CDK 卡密系统接入文档
+# ZovoCard · CDK 卡密系统接入文档
 
 CDK(激活码/卡密)让你把 GPT 直充做成「一次性兑换码」生意:你在卡台**买 CDK**(扣服务费、授权由你名下资金承担开卡),拿到一次性码 → 分发/售卖 → 买家在**任意独立前端**输入码兑换 → 兑换时自动**消耗你的账户余额、用你名下的卡**开通订阅。前端可换多套主题、独立分发,后端始终指向卡台。
 
@@ -19,7 +19,7 @@ CDK(激活码/卡密)让你把 GPT 直充做成「一次性兑换码」生意:�
 | 资金上限 | 发码时按套餐估算的授权上限(`owner_funding_cap_minor`),单次兑换实付不得超过它。 |
 | 一次性码 | 完整码只在**发码响应**返回一次,请务必保存;之后列表只显示码前缀。 |
 
-套餐:`plus` / `pro_5x` / `pro_20x`。
+套餐:`go`（ChatGPT Go）/ `plus` / `pro_5x` / `pro_20x`。新码前缀为 `ZC-`;历史 `GPTD-` 旧码仍可正常兑换。
 
 ---
 
@@ -32,7 +32,7 @@ CDK(激活码/卡密)让你把 GPT 直充做成「一次性兑换码」生意:�
 ### 2.1 预览 `POST /api/v1/cdk/preview`
 
 ```json
-{ "code": "SXC-XXXX-XXXX-XXXX-XXXX" }
+{ "code": "ZC-XXXX-XXXX-XXXX-XXXX" }
 ```
 
 返回套餐、可兑换状态与一个 `redemption_token`(后续步骤用)。码无效/已用/已冻结/已删除时统一返回「CDK 无效或不可用」。
@@ -113,7 +113,7 @@ CDK(激活码/卡密)让你把 GPT 直充做成「一次性兑换码」生意:�
 {
   "code": 0, "msg": "ok",
   "data": { "requested": 1, "issued": [
-    { "id": 123, "code": "SXC-XXXX-XXXX-XXXX-XXXX", "plan": "plus", "code_prefix": "SXC-XXXX-XXXX", "fee_amount_minor": 100 }
+    { "id": 123, "code": "ZC-XXXX-XXXX-XXXX-XXXX", "plan": "plus", "code_prefix": "ZC-XXXX-XXXX", "fee_amount_minor": 100 }
   ] }
 }
 ```
@@ -128,10 +128,10 @@ CDK(激活码/卡密)让你把 GPT 直充做成「一次性兑换码」生意:�
 | --- | --- |
 | `page` / `page_size` | 分页；`page_size` 1–100，默认 20 |
 | `status` | `unused` / `reserved` / `consumed` / `frozen` / `disabled` 等 |
-| `plan` | `plus` / `pro_5x` / `pro_20x` |
+| `plan` | `go` / `plus` / `pro_5x` / `pro_20x` |
 | `q` | 模糊：CDK id 或 `code_prefix` 子串（可搜前缀片段） |
 
-示例:`GET /openapi/v1/gpt-direct/cdks?page=1&page_size=50&status=unused&q=GPTD-AB12`
+示例:`GET /openapi/v1/gpt-direct/cdks?page=1&page_size=50&status=unused&q=ZC-AB12`
 
 **兑换选卡**:卡台运营配置默认渠道/卡头(如渠道1 + G5554LC)。先看渠道是否开启,关则换渠道;渠道开则优先指定卡头,停用后用同渠道其它卡头;无卡则开卡。发码跟随平台默认,无需在 Open API 传参。
 

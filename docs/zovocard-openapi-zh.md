@@ -1,4 +1,4 @@
-# SpaceX Card 開放 API 文檔
+# ZovoCard 開放 API 文檔
 
 通過開放 API 程序化完成開卡、查卡、卡充值、退款、凍結、消費查詢等操作。所有調用按你的賬戶餘額與專屬費率計費（與網頁端一致）。
 
@@ -744,6 +744,7 @@ VIP 達標後自動開放，不需要管理員再寫入 `gpt_direct_enabled`。�
 
 | `plan` | 套餐 | API / CDK 服務費 | 上游訂閱價格 |
 | --- | --- | ---: | --- |
+| `go` | Go（ChatGPT Go）| **0 U（免費）** | 以預檢報價為準 |
 | `plus` | Plus | **1 U** | 以預檢報價為準 |
 | `pro_5x` | Pro 5x | **5 U** | 以預檢報價為準 |
 | `pro_20x` | Pro 20x | **10 U** | 以預檢報價為準 |
@@ -863,7 +864,7 @@ curl -X POST https://zovocard.com/openapi/v1/gpt-direct/preflight \
 | 參數 | 類型 | 必填 | 說明 |
 | --- | --- | --- | --- |
 | `card_id` | number | 是 | 用於支付的名下卡 ID |
-| `plan` | string | 是 | `plus` / `pro_5x` / `pro_20x` |
+| `plan` | string | 是 | `go` / `plus` / `pro_5x` / `pro_20x` |
 | `credential` | object | 是 | 與預檢相同的憑據結構；使用預檢令牌時以服務端預檢結果為準 |
 | `preflight_token` | string | 否 | 預檢返回的一次性令牌；推薦使用 |
 | `client_request_id` | string | 是 | 商戶側訂單號，當前用戶下最長 80 字符；重試必須保持不變 |
@@ -929,11 +930,11 @@ curl -X POST https://zovocard.com/openapi/v1/gpt-direct/orders \
 { "plan": "pro_5x", "count": 1, "funding_confirmed": true }
 ```
 
-`count` 默認 1，單次最多 50 張；每張 CDK 分別按 `1 / 5 / 10 U` 服務費扣款。明文 `code` 只在成功響應返回一次，請立即加密保存，不要寫入日誌。
+`count` 默認 1，單次最多 50 張；每張 CDK 分別按 `1 / 5 / 10 U` 服務費扣款。明文 `code` 只在成功響應返回一次，請立即加密保存，不要寫入日誌。新發碼前綴為 `ZC-`；歷史 `GPTD-` 舊碼仍可正常兌換。
 
 `GET /gpt-direct/cdks?page=1&page_size=20` 返回當前用戶購買或持有的 CDK（`data.list`、`data.total`）。
 
-可選：`page`、`page_size`（1–100）、`status`、`plan`、`q`（id 精確或 `code_prefix` 模糊）。示例：`?page=1&page_size=50&status=unused&q=GPTD-AB12`。
+可選：`page`、`page_size`（1–100）、`status`、`plan`、`q`（id 精確或 `code_prefix` 模糊）。示例：`?page=1&page_size=50&status=unused&q=ZC-AB12`。
 
 **兌換選卡（平台側）**：運營可配置默認渠道+卡頭；先判斷渠道是否開啟（關則換渠道），再優先指定卡頭；卡頭停用則用同渠道其餘卡頭；無卡則開卡。Open API 發碼跟隨平台默認偏好。
 
@@ -1117,7 +1118,7 @@ CDK 狀態包括 `unused`、`reserved`、`consumed`、`frozen`、`disabled`；�
 | `type` | string | 固定為 `gpt_direct.completed`；GPT 事件使用 `type`，不是卡事件的 `event` |
 | `order_id` | number | 平台 GPT 直充訂單 ID |
 | `client_request_id` | string | 創建訂單時的商戶訂單號 |
-| `plan` | string | `plus` / `pro_5x` / `pro_20x` |
+| `plan` | string | `go` / `plus` / `pro_5x` / `pro_20x` |
 | `account_email` | string | 預檢識別到的 GPT 賬號郵箱 |
 | `status` | string | 固定為 `completed` |
 | `final_amount_minor` | number | 上游最終扣款金額的最小單位；不是 API 服務費 |
