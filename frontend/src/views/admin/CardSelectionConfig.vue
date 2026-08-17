@@ -348,6 +348,32 @@ const showAddDialog = ref(false)
 const showOffline = ref(false)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
+// 本站兑换策略（此前漏定义导致整页白屏）
+const policy = reactive({
+  enabled: false,
+  no_auto_card_switch: true,
+  auto_open_when_no_card: true,
+  max_new_accounts_per_card: 4,
+  max_cards_per_task: 3,
+  fail_cooldown_hours: 24,
+  issuing_area: 'United States',
+  holder_first: 'GPT',
+  holder_last: 'Direct',
+  product_code: '',
+  issuer: '',
+})
+const autoSwitchUnpaid = ref(false)
+const policySaving = ref(false)
+const resolvedPref = reactive({
+  issuer: '',
+  segment_type: '',
+  segment_key: '',
+})
+// 勾选「失败后自动换卡」→ 关闭 no_auto_card_switch
+watch(autoSwitchUnpaid, (v) => {
+  policy.no_auto_card_switch = !v
+})
+
 const ISSUER_MAP: Record<string, string> = {
   one: '渠道1', two: '渠道2', three: '渠道3', four: '渠道4', five: '渠道5',
 }
