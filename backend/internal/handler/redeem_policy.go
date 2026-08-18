@@ -15,6 +15,9 @@ type SiteRedeemPolicy struct {
 	Enabled bool `json:"enabled"`
 	// NoAutoCardSwitch=true → 兑换时向卡台传 no_auto_card_switch（失败不自动换卡）
 	NoAutoCardSwitch bool `json:"no_auto_card_switch"`
+	// StrictCardPreference=true → 兑换时向卡台传 strict_card_preference：CDK 严格按本站选卡配置
+	// (发码偏好)选卡，卡台默认级联(537872/星链)只给卡台直充用户、不再盖过 CDK。默认开。
+	StrictCardPreference bool `json:"strict_card_preference"`
 	// AutoOpenWhenNoCard：展示/说明用；卡台 CDK 兑换默认 auto_open，本字段预留与文档对齐
 	AutoOpenWhenNoCard bool `json:"auto_open_when_no_card"`
 	// 每卡新账号上限（展示 + 写入审计；硬限以卡台为准）
@@ -38,6 +41,7 @@ func defaultSiteRedeemPolicy() SiteRedeemPolicy {
 	return SiteRedeemPolicy{
 		Enabled:               false,
 		NoAutoCardSwitch:      true, // 启用本站策略时默认不让卡台自动换卡
+		StrictCardPreference:  true, // CDK 严格按本站选卡配置，不被卡台默认 537872 盖过
 		AutoOpenWhenNoCard:    true,
 		MaxNewAccountsPerCard: 4,
 		MaxCardsPerTask:       3,

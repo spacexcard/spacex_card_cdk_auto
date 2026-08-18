@@ -296,9 +296,11 @@ type CardHealthPolicy struct {
 
 func DefaultCardHealthPolicy() CardHealthPolicy {
 	return CardHealthPolicy{
-		Enabled:           true,
-		FailThreshold:     2,
-		FreezeOnBlock:     true,
+		Enabled:       true,
+		FailThreshold: 2,
+		// 不再冻结卡台侧的卡：拉黑仅记在本站，兑换时经 exclude_card_ids 让 CDK 不选它，
+		// 卡台状态不变、直充用户依旧可用。FreezeOnBlock 保留字段兼容但已不触发真冻结。
+		FreezeOnBlock:     false,
 		RequireKnownEmail: true,
 	}
 }

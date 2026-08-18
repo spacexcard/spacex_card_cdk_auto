@@ -185,9 +185,6 @@ func ObserveCardOrderOutcome(ctx context.Context, in CardOrderObservation) *Card
 		FreezeStatus:   "skipped",
 		Notes:          "不同邮箱在该卡上失败≥阈值，本站判定为卡问题",
 	}
-	if policy.FreezeOnBlock {
-		entry.FreezeStatus = "pending"
-	}
 	if err := db.UpsertCardBlock(entry); err != nil {
 		log.Printf("[card-health] block card=%d: %v", in.CardID, err)
 		res.Error = err.Error()
@@ -199,23 +196,9 @@ func ObserveCardOrderOutcome(ctx context.Context, in CardOrderObservation) *Card
 			" fails="+strconv.Itoa(stats.FailCount)+
 			" emails="+strconv.Itoa(stats.DistinctEmails),
 		"")
-
-	if policy.FreezeOnBlock {
-		cli := cardplatform.NewFromSettings()
-		freezeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		defer cancel()
-		if err := cli.FreezeCard(freezeCtx, in.CardID, true); err != nil {
-			log.Printf("[card-health] freeze card=%d failed: %v", in.CardID, err)
-			_ = db.UpdateCardBlockFreeze(in.CardID, "failed", err.Error())
-			res.FreezeStatus = "failed"
-			res.Error = err.Error()
-		} else {
-			_ = db.UpdateCardBlockFreeze(in.CardID, "ok", "")
-			res.FreezeStatus = "ok"
-			log.Printf("[card-health] froze card=%d last4=%s fails=%d emails=%d",
-				in.CardID, in.CardLastFour, stats.FailCount, stats.DistinctEmails)
-		}
-	}
+	// 只在 CDK 本地拉黑，不冻卡台侧的卡（按需求：卡台状态不变、直充用户依旧可用）。
+	// 拉黑后本站兑换经 PublicCDKRedeem 注入 exclude_card_ids，让 CDK 本单不选这些卡；
+	// 实时生效、无需冻结/对账。FreezeStatus 保持 "skipped"（= 本站不冻卡台）。
 	return res
 }
 
@@ -475,18 +458,11 @@ func AdminUnblockCard(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	freezeMsg := ""
-	if body.Unfreeze {
-		cli := cardplatform.NewFromSettings()
-		if err := cli.FreezeCard(c.Request.Context(), body.CardID, false); err != nil {
-			freezeMsg = err.Error()
-		} else {
-			freezeMsg = "unfroze"
-		}
-	}
+	// 本站不再冻结卡台侧的卡，解黑也无需解冻（Unfreeze 字段保留兼容，已为 no-op）。
+	// 解黑后，兑换注入的 exclude_card_ids 自然不再包含此卡，CDK 会重新可选它。
 	db.WriteAudit(adminName(c), "card_health.unblock",
-		"card_id="+strconv.FormatInt(body.CardID, 10)+" unfreeze="+freezeMsg, c.ClientIP())
-	c.JSON(http.StatusOK, gin.H{"ok": true, "unfreeze": freezeMsg})
+		"card_id="+strconv.FormatInt(body.CardID, 10), c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 // AdminReobserveCardOrder POST /api/v1/admin/card-health/observe

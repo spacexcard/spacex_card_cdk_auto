@@ -857,6 +857,17 @@ func PublicCDKRedeem(c *gin.Context) {
 		if _, exists := body["no_auto_card_switch"]; !exists {
 			body["no_auto_card_switch"] = policy.NoAutoCardSwitch
 		}
+		// CDK 严格按本站选卡配置：卡台默认级联(537872/星链)只给卡台直充用户,不盖过 CDK 偏好。
+		if _, exists := body["strict_card_preference"]; !exists {
+			body["strict_card_preference"] = policy.StrictCardPreference
+		}
+	}
+	// 本站坏卡黑名单 → 本单排除这些卡：CDK 走 CDK 自己的选卡规则。实时读黑名单、纯选卡维度
+	// 排除,卡台不冻结这些卡(卡台直充用户依旧可用)。拉黑即时生效,无需固化/对账。
+	if _, exists := body["exclude_card_ids"]; !exists {
+		if ids, err := db.ListActiveBlockedCardIDs(); err == nil && len(ids) > 0 {
+			body["exclude_card_ids"] = ids
+		}
 	}
 	cli := cardplatform.NewFromSettings()
 	st, raw, err := cli.Redeem(c.Request.Context(), body, deviceFrom(c))
