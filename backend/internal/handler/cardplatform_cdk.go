@@ -269,53 +269,33 @@ func CardPlatformStoreCDKCodes(c *gin.Context) {
 }
 
 // CardPlatformListStoredCDKs GET /api/v1/admin/cardplatform/cdks/stored
-// 只读本站已存完整码（随时复制/导出；不依赖卡台列表分页）。
-// query: plan= / q= / status= / limit= / format=json|txt
+// 只读本站已存完整码（随时复制/导出；不依赖卡台列表）。
+// query: plan= / q= / status= / page= / page_size= / limit= / format=json|txt
+//
+// 列表默认分页（page_size=20）；导出 txt / 显式大 limit 仍可一次拉多条。
+// 状态以本站 SQLite 为准（禁用/解禁已回写）；不再每次请求去卡台刷几千条状态。
 func CardPlatformListStoredCDKs(c *gin.Context) {
 	plan := strings.TrimSpace(c.Query("plan"))
 	q := strings.TrimSpace(c.Query("q"))
-	status := strings.TrimSpace(c.Query("status"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "5000"))
+	status := strings.TrimSpace(strings.ToLower(c.Query("status")))
 	format := strings.ToLower(strings.TrimSpace(c.DefaultQuery("format", "json")))
-	// 先不过滤 status，拉全量缓存后再用卡台实时状态过滤（本地 status 可能滞后）
-	list, err := db.ListCardplatformStoredCDKCodesFilter(plan, q, "", limit)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	// 用卡台列表补齐/刷新 status（best-effort，失败仍返回本地缓存）
-	statusMap := map[int64]string{}
-	cli := cardplatform.NewFromSettings()
-	for page := 1; page <= 30; page++ {
-		res, err := cli.ListCDKs(c.Request.Context(), page, 100)
-		if err != nil || res == nil || len(res.List) == 0 {
-			break
-		}
-		for _, it := range res.List {
-			statusMap[it.ID] = it.Status
-			if it.ID > 0 && it.Status != "" {
-				_ = db.UpdateCardplatformCDKStatus(it.ID, it.Status)
-			}
-		}
-		if len(res.List) < 100 {
-			break
-		}
-	}
-	wantStatus := strings.ToLower(status)
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "0"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "0"))
+
+	// 导出：一次尽量多取（硬顶 10000），按本地 status 过滤
 	if format == "txt" || format == "text" || format == "plain" {
+		if limit <= 0 {
+			limit = 10000
+		}
+		list, _, err := db.ListCardplatformStoredCDKCodesPage(plan, q, status, 1, limit)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 		var b strings.Builder
 		for _, it := range list {
 			if strings.TrimSpace(it.Code) == "" {
-				continue
-			}
-			st := it.Status
-			if s, ok := statusMap[it.UpstreamID]; ok && s != "" {
-				st = s
-			}
-			if st == "" {
-				st = "unused"
-			}
-			if wantStatus != "" && st != wantStatus {
 				continue
 			}
 			b.WriteString(it.Code)
@@ -323,6 +303,34 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 		}
 		c.Header("Content-Disposition", `attachment; filename="cdk-full-codes.txt"`)
 		c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(b.String()))
+		return
+	}
+
+	// JSON 列表：优先 page/page_size；兼容旧客户端只传 limit（复制全部等 bulk）
+	hasPageParam := strings.TrimSpace(c.Query("page")) != "" || strings.TrimSpace(c.Query("page_size")) != ""
+	bulkLegacy := !hasPageParam && limit > 0
+	if pageSize <= 0 {
+		if bulkLegacy {
+			pageSize = limit
+			page = 1
+		} else {
+			pageSize = 20
+		}
+	}
+	maxPage := 200
+	if bulkLegacy {
+		maxPage = 10000 // 复制/导出全部仍可一次取够
+	}
+	if pageSize > maxPage {
+		pageSize = maxPage
+	}
+	if page < 1 {
+		page = 1
+	}
+
+	list, total, err := db.ListCardplatformStoredCDKCodesPage(plan, q, status, page, pageSize)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	noteIDs := make([]int64, 0, len(list))
@@ -333,14 +341,8 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 	out := make([]gin.H, 0, len(list))
 	for _, it := range list {
 		st := it.Status
-		if s, ok := statusMap[it.UpstreamID]; ok && s != "" {
-			st = s
-		}
 		if st == "" {
 			st = "unused"
-		}
-		if wantStatus != "" && st != wantStatus {
-			continue
 		}
 		out = append(out, gin.H{
 			"id": it.UpstreamID, "code": it.Code, "full_code": it.Code,
@@ -351,8 +353,12 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"list": out, "total": len(out), "full_code_in_store": db.CountCardplatformCDKCodes(),
-		"server_stored": true,
+		"list":               out,
+		"total":              total,
+		"page":               page,
+		"page_size":          pageSize,
+		"full_code_in_store": db.CountCardplatformCDKCodes(),
+		"server_stored":      true,
 	})
 }
 

@@ -382,15 +382,14 @@
         </div>
         <div class="flex flex-wrap items-center justify-between gap-3 text-sm text-muted">
           <span v-if="listMode === 'upstream'">第 {{ page }} 页 · 共 {{ total }} 条</span>
-          <span v-else>本站完整码库 · 共 {{ total }} 条</span>
+          <span v-else>本站完整码库 · 第 {{ page }} 页 · 共 {{ total }} 条</span>
           <el-pagination
-            v-if="listMode === 'upstream'"
             background
             layout="total, sizes, prev, pager, next"
             :total="total"
             :page-size="pageSize"
             :current-page="page"
-            :page-sizes="[20, 50, 100]"
+            :page-sizes="[20, 50, 100, 200]"
             :disabled="loadingList"
             @current-change="(p: number) => { page = p; loadList() }"
             @size-change="(s: number) => { pageSize = s; page = 1; loadList() }"
@@ -1244,7 +1243,10 @@ async function loadList() {
   clearSelection()
   try {
     if (listMode.value === 'stored') {
-      const qs = new URLSearchParams({ limit: '5000' })
+      const qs = new URLSearchParams({
+        page: String(page.value),
+        page_size: String(pageSize.value),
+      })
       if (listQ.value.trim()) qs.set('q', listQ.value.trim())
       if (listPlan.value) qs.set('plan', listPlan.value)
       if (listStatus.value) qs.set('status', listStatus.value)
@@ -1259,9 +1261,10 @@ async function loadList() {
       const list = Array.isArray(d.list) ? d.list : []
       rememberIssued(list, form.plan)
       rows.value = list
-      total.value = d.total ?? list.length
+      total.value = Number(d.total) || 0
+      if (d.page) page.value = Number(d.page) || page.value
       storeStats.fullOnPage = list.filter((it: any) => isFullCode(extractFullCode(it) || it.code)).length
-      storeStats.fullInStore = d.full_code_in_store != null ? Number(d.full_code_in_store) : list.length
+      storeStats.fullInStore = d.full_code_in_store != null ? Number(d.full_code_in_store) : null
       return
     }
 

@@ -961,50 +961,83 @@ func ListCardplatformStoredCDKCodes(plan, q string, limit int) ([]StoredCDKCode,
 	return ListCardplatformStoredCDKCodesFilter(plan, q, "", limit)
 }
 
-// ListCardplatformStoredCDKCodesFilter 可按 status 过滤。
-func ListCardplatformStoredCDKCodesFilter(plan, q, status string, limit int) ([]StoredCDKCode, error) {
-	if DB == nil {
-		return nil, fmt.Errorf("db not init")
-	}
-	if limit <= 0 {
-		limit = 5000
-	}
-	if limit > 10000 {
-		limit = 10000
-	}
+func cardplatformStoredWhere(plan, q, status string) (where string, args []any) {
 	plan = strings.TrimSpace(plan)
 	q = strings.TrimSpace(q)
 	status = strings.TrimSpace(strings.ToLower(status))
-	sql := `
-		SELECT COALESCE(upstream_id,0), code, COALESCE(code_prefix,''), COALESCE(plan,''),
-		       COALESCE(fee_amount_minor,0), COALESCE(status,''), COALESCE(created_at,'')
-		FROM cardplatform_cdk_codes WHERE 1=1`
-	args := []any{}
+	where = ` WHERE 1=1`
 	if plan != "" {
-		sql += ` AND plan = ?`
+		where += ` AND plan = ?`
 		args = append(args, plan)
 	}
 	if status != "" {
-		sql += ` AND status = ?`
+		where += ` AND status = ?`
 		args = append(args, status)
 	}
 	if q != "" {
-		sql += ` AND (code LIKE ? OR code_prefix LIKE ? OR CAST(upstream_id AS TEXT) = ?)`
+		where += ` AND (code LIKE ? OR code_prefix LIKE ? OR CAST(upstream_id AS TEXT) = ?)`
 		like := "%" + q + "%"
 		args = append(args, like, like, q)
 	}
-	sql += ` ORDER BY created_at DESC, rowid DESC LIMIT ?`
-	args = append(args, limit)
+	return where, args
+}
+
+// CountCardplatformStoredCDKCodesFilter 符合过滤条件的本站完整码总数。
+func CountCardplatformStoredCDKCodesFilter(plan, q, status string) (int, error) {
+	if DB == nil {
+		return 0, fmt.Errorf("db not init")
+	}
+	where, args := cardplatformStoredWhere(plan, q, status)
+	var n int
+	err := DB.QueryRow(`SELECT COUNT(*) FROM cardplatform_cdk_codes`+where, args...).Scan(&n)
+	return n, err
+}
+
+// ListCardplatformStoredCDKCodesFilter 可按 status 过滤（旧接口：仅 LIMIT，无 OFFSET）。
+func ListCardplatformStoredCDKCodesFilter(plan, q, status string, limit int) ([]StoredCDKCode, error) {
+	list, _, err := ListCardplatformStoredCDKCodesPage(plan, q, status, 1, limit)
+	return list, err
+}
+
+// ListCardplatformStoredCDKCodesPage 分页列出本站完整码。
+// page 从 1 起；pageSize<=0 时默认 20；单页硬顶 500（列表），导出请用更大 limit 的旧路径或 pageSize 上限 10000。
+// 返回 list + 过滤后 total。
+func ListCardplatformStoredCDKCodesPage(plan, q, status string, page, pageSize int) ([]StoredCDKCode, int, error) {
+	if DB == nil {
+		return nil, 0, fmt.Errorf("db not init")
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 10000 {
+		pageSize = 10000
+	}
+	total, err := CountCardplatformStoredCDKCodesFilter(plan, q, status)
+	if err != nil {
+		return nil, 0, err
+	}
+	where, args := cardplatformStoredWhere(plan, q, status)
+	offset := (page - 1) * pageSize
+	sql := `
+		SELECT COALESCE(upstream_id,0), code, COALESCE(code_prefix,''), COALESCE(plan,''),
+		       COALESCE(fee_amount_minor,0), COALESCE(status,''), COALESCE(created_at,'')
+		FROM cardplatform_cdk_codes` + where + `
+		ORDER BY created_at DESC, rowid DESC
+		LIMIT ? OFFSET ?`
+	args = append(args, pageSize, offset)
 	rows, err := DB.Query(sql, args...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
-	out := make([]StoredCDKCode, 0, 64)
+	out := make([]StoredCDKCode, 0, pageSize)
 	for rows.Next() {
 		var it StoredCDKCode
 		if err := rows.Scan(&it.UpstreamID, &it.Code, &it.CodePrefix, &it.Plan, &it.FeeAmountMinor, &it.Status, &it.CreatedAt); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		it.Code = strings.TrimSpace(it.Code)
 		if it.Code == "" {
@@ -1015,7 +1048,7 @@ func ListCardplatformStoredCDKCodesFilter(plan, q, status string, limit int) ([]
 		}
 		out = append(out, it)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }
 
 // LookupCardplatformCDKCode 按上游 id 或 prefix 取完整码。
