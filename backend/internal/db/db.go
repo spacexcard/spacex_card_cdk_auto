@@ -975,9 +975,17 @@ func cardplatformStoredWhere(plan, q, status string) (where string, args []any) 
 		args = append(args, status)
 	}
 	if q != "" {
-		where += ` AND (code LIKE ? OR code_prefix LIKE ? OR CAST(upstream_id AS TEXT) = ?)`
+		where += ` AND (
+			code LIKE ? COLLATE NOCASE
+			OR code_prefix LIKE ? COLLATE NOCASE
+			OR CAST(upstream_id AS TEXT) = ?
+			OR upstream_id IN (
+				SELECT upstream_id FROM cardplatform_cdk_notes
+				WHERE IFNULL(note, '') LIKE ? COLLATE NOCASE
+			)
+		)`
 		like := "%" + q + "%"
-		args = append(args, like, like, q)
+		args = append(args, like, like, q, like)
 	}
 	return where, args
 }
