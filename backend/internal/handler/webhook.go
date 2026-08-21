@@ -71,11 +71,42 @@ func CardPlatformWebhook(c *gin.Context) {
 			db.WriteAudit("webhook", "gpt_direct.completed", idem, c.ClientIP())
 		}
 	}
-	// 卡健康：失败/成功终态观察（同卡多邮箱失败 → 拉黑并冻结）
+	// 本站 CDK 状态：兑换完成 → consumed（避免列表仍显示「未使用」）
+	if strings.HasPrefix(strings.ToLower(eventType), "gpt_direct.") {
+		applyCDKStatusFromWebhook(payload, eventType)
+	}
+	// 卡健康：失败/成功终态观察（同卡多邮箱失败 → 拉黑）
 	if strings.HasPrefix(strings.ToLower(eventType), "gpt_direct.") {
 		observeFromWebhookPayload(payload)
 	}
 	c.Status(http.StatusOK)
+}
+
+// applyCDKStatusFromWebhook 根据卡台终态回写本站 SQLite 中的 CDK status。
+func applyCDKStatusFromWebhook(payload map[string]interface{}, eventType string) {
+	if payload == nil {
+		return
+	}
+	cdkID := anyToInt64(payload["cdk_id"])
+	if cdkID <= 0 {
+		return
+	}
+	et := strings.ToLower(strings.TrimSpace(eventType))
+	st := strings.ToLower(strings.TrimSpace(strAny(payload["cdk_status"])))
+	if st == "" {
+		if strings.Contains(et, "completed") {
+			st = "consumed"
+		} else {
+			return
+		}
+	}
+	// 失败回传 unused 时，勿把已 consumed/disabled 降级回去
+	if st == "unused" || st == "reserved" {
+		if cur := db.GetCardplatformCDKStatus(cdkID); cur == "consumed" || cur == "disabled" {
+			return
+		}
+	}
+	_ = db.UpdateCardplatformCDKStatus(cdkID, st)
 }
 
 func webhookIdemKey(p map[string]interface{}, eventType string) string {

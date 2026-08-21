@@ -934,6 +934,19 @@ func UpdateCardplatformCDKStatus(upstreamID int64, status string) error {
 	return err
 }
 
+// GetCardplatformCDKStatus 读本站缓存状态；无记录返回空串。
+func GetCardplatformCDKStatus(upstreamID int64) string {
+	if DB == nil || upstreamID <= 0 {
+		return ""
+	}
+	var st string
+	err := DB.QueryRow(`SELECT COALESCE(status,'') FROM cardplatform_cdk_codes WHERE upstream_id = ? LIMIT 1`, upstreamID).Scan(&st)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(st))
+}
+
 // CountCardplatformCDKCodes 本站已存完整码数量（运维/健康检查）。
 func CountCardplatformCDKCodes() int {
 	if DB == nil {

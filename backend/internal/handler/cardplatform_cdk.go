@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	"github.com/tuzi/cdk-recharge-system/internal/cardplatform"
@@ -273,7 +274,7 @@ func CardPlatformStoreCDKCodes(c *gin.Context) {
 // query: plan= / q= / status= / page= / page_size= / limit= / format=json|txt
 //
 // 列表默认分页（page_size=20）；导出 txt / 显式大 limit 仍可一次拉多条。
-// 状态以本站 SQLite 为准（禁用/解禁已回写）；不再每次请求去卡台刷几千条状态。
+// 状态：本站 SQLite + 当前页轻量向卡台核对（不再整库翻页）；Webhook completed 也会回写 consumed。
 func CardPlatformListStoredCDKs(c *gin.Context) {
 	plan := strings.TrimSpace(c.Query("plan"))
 	q := strings.TrimSpace(c.Query("q"))
@@ -282,6 +283,7 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "0"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "0"))
+	skipSync := c.Query("sync") == "0" || c.Query("sync") == "false"
 
 	// 导出：一次尽量多取（硬顶 10000），按本地 status 过滤
 	if format == "txt" || format == "text" || format == "plain" {
@@ -333,6 +335,19 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	// 当前页向卡台核对状态（仅本页 ID；bulk 大导出跳过以免拖慢）
+	statusMap := map[int64]string{}
+	if !skipSync && !bulkLegacy && len(list) > 0 && len(list) <= 200 {
+		ids := make([]int64, 0, len(list))
+		for _, it := range list {
+			if it.UpstreamID > 0 {
+				ids = append(ids, it.UpstreamID)
+			}
+		}
+		statusMap = refreshStoredCDKStatuses(c.Request.Context(), ids)
+	}
+
 	noteIDs := make([]int64, 0, len(list))
 	for _, it := range list {
 		noteIDs = append(noteIDs, it.UpstreamID)
@@ -341,6 +356,9 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 	out := make([]gin.H, 0, len(list))
 	for _, it := range list {
 		st := it.Status
+		if s, ok := statusMap[it.UpstreamID]; ok && s != "" {
+			st = s
+		}
 		if st == "" {
 			st = "unused"
 		}
@@ -359,7 +377,56 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 		"page_size":          pageSize,
 		"full_code_in_store": db.CountCardplatformCDKCodes(),
 		"server_stored":      true,
+		"status_synced":      len(statusMap) > 0,
 	})
+}
+
+// refreshStoredCDKStatuses 按上游 id 轻量查询卡台状态并回写本站缓存。
+// 每页并发有限，避免整库扫描。
+func refreshStoredCDKStatuses(ctx context.Context, ids []int64) map[int64]string {
+	out := make(map[int64]string, len(ids))
+	if len(ids) == 0 {
+		return out
+	}
+	cli := cardplatform.NewFromSettings()
+	type pair struct {
+		id int64
+		st string
+	}
+	ch := make(chan pair, len(ids))
+	sem := make(chan struct{}, 6)
+	var wg sync.WaitGroup
+	for _, id := range ids {
+		id := id
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			res, err := cli.ListCDKsQuery(ctx, cardplatform.CDKListQuery{
+				Page: 1, PageSize: 5, Query: strconv.FormatInt(id, 10),
+			})
+			if err != nil || res == nil {
+				return
+			}
+			for _, it := range res.List {
+				if it.ID == id && strings.TrimSpace(it.Status) != "" {
+					st := strings.ToLower(strings.TrimSpace(it.Status))
+					_ = db.UpdateCardplatformCDKStatus(id, st)
+					ch <- pair{id: id, st: st}
+					return
+				}
+			}
+		}()
+	}
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
+	for p := range ch {
+		out[p.id] = p.st
+	}
+	return out
 }
 
 // CardPlatformDisableCDK POST /api/v1/admin/cardplatform/cdks/:id/disable
