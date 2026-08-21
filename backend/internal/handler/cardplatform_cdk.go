@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -107,11 +108,28 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 		return
 	}
 	plan := strings.TrimSpace(req.Plan)
-	switch plan {
-	case "go", "plus", "pro_5x", "pro_20x":
-	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "plan must be go | plus | pro_5x | pro_20x"})
+	if plan == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "plan is required"})
 		return
+	}
+	// ★档位以卡台实时下发为准，不要在这里写死白名单★
+	// 写死的话，卡台每开一个新档位（Codex 点数 credit250/500/1000）这里都会 400 挡下，
+	// 代理明明有权限发码却发不出来，而且报错还指向一个过期的档位清单。
+	// 卡台侧本来就会再校验一次，这里只做「拿得到档位表就按表校验」的前置拦截。
+	if cli := cardplatform.NewFromSettings(); cli != nil {
+		if plans, err := cli.GetPlans(c.Request.Context()); err == nil && plans != nil && len(plans.Plans) > 0 {
+			if _, ok := plans.Plans[plan]; !ok {
+				known := make([]string, 0, len(plans.Plans))
+				for k := range plans.Plans {
+					known = append(known, k)
+				}
+				sort.Strings(known)
+				c.JSON(http.StatusBadRequest, gin.H{"error": "unknown plan: " + plan + "; available: " + strings.Join(known, " | ")})
+				return
+			}
+		}
+		// 拿不到档位表（卡台不可用/未配置）时不拦：交给卡台发码时校验，
+		// 避免因为一次网络抖动就让代理发不了码。
 	}
 	if !req.FundingConfirmed {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "funding_confirmed must be true（确认承担兑换时开卡/充值/订阅实付）"})
@@ -205,9 +223,9 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 		issued = append(issued, gin.H{
 			"id": it.ID, "code": code, "plan": it.Plan,
 			"code_prefix": prefix, "fee_amount_minor": it.FeeAmountMinor,
-			"code_length": len(code),
-			"full_code":   code,
-			"stored":      storedOK,
+			"code_length":   len(code),
+			"full_code":     code,
+			"stored":        storedOK,
 			"has_full_code": true,
 		})
 	}
@@ -495,7 +513,7 @@ func CardPlatformBatchDisableCDKs(c *gin.Context) {
 	db.WriteAudit(username, "cardplatform_batch_disable_cdk",
 		"ok="+strconv.Itoa(res.DisabledCount)+" fail="+strconv.Itoa(res.FailedCount), c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{
-		"ok": true,
+		"ok":       true,
 		"disabled": res.Disabled, "failed": res.Failed,
 		"disabled_count": res.DisabledCount, "failed_count": res.FailedCount,
 	})
@@ -528,7 +546,7 @@ func CardPlatformBatchEnableCDKs(c *gin.Context) {
 	db.WriteAudit(username, "cardplatform_batch_enable_cdk",
 		"ok="+strconv.Itoa(res.EnabledCount)+" fail="+strconv.Itoa(res.FailedCount), c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{
-		"ok": true,
+		"ok":      true,
 		"enabled": res.Enabled, "failed": res.Failed,
 		"enabled_count": res.EnabledCount, "failed_count": res.FailedCount,
 	})
@@ -1068,11 +1086,14 @@ func PublicCDKPlans(c *gin.Context) {
 			"version": 0,
 			"source":  "docs_default",
 			"plans": map[string]any{
-				"plus":    gin.H{"key": "plus", "label": "Plus", "serviceFeeUsdMinor": 100, "service_fee_usd": 1, "enabled": true},
-				"pro_5x":  gin.H{"key": "pro_5x", "label": "Pro 5x", "serviceFeeUsdMinor": 500, "service_fee_usd": 5, "enabled": true},
-				"pro_20x": gin.H{"key": "pro_20x", "label": "Pro 20x", "serviceFeeUsdMinor": 1000, "service_fee_usd": 10, "enabled": true},
+				"plus":       gin.H{"key": "plus", "label": "Plus", "serviceFeeUsdMinor": 100, "service_fee_usd": 1, "enabled": true},
+				"pro_5x":     gin.H{"key": "pro_5x", "label": "Pro 5x", "serviceFeeUsdMinor": 500, "service_fee_usd": 5, "enabled": true},
+				"pro_20x":    gin.H{"key": "pro_20x", "label": "Pro 20x", "serviceFeeUsdMinor": 1000, "service_fee_usd": 10, "enabled": true},
+				"credit250":  gin.H{"key": "credit250", "label": "Codex 点数 250", "serviceFeeUsdMinor": 10, "service_fee_usd": 0.1, "enabled": true},
+				"credit500":  gin.H{"key": "credit500", "label": "Codex 点数 500", "serviceFeeUsdMinor": 10, "service_fee_usd": 0.1, "enabled": true},
+				"credit1000": gin.H{"key": "credit1000", "label": "Codex 点数 1000", "serviceFeeUsdMinor": 10, "service_fee_usd": 0.1, "enabled": true},
 			},
-			"note": "配置卡台 API Key 后将返回账户实时价",
+			"note": "★这是文档默认兜底价，不是你的账户实时价★：配置卡台 API Key 后才会返回实时值。点数档位是否开放同样以卡台实时返回为准。",
 		})
 		return
 	}
@@ -1084,9 +1105,12 @@ func PublicCDKPlans(c *gin.Context) {
 			"source":  "docs_default_fallback",
 			"error":   err.Error(),
 			"plans": map[string]any{
-				"plus":    gin.H{"key": "plus", "label": "Plus", "serviceFeeUsdMinor": 100, "service_fee_usd": 1, "enabled": true},
-				"pro_5x":  gin.H{"key": "pro_5x", "label": "Pro 5x", "serviceFeeUsdMinor": 500, "service_fee_usd": 5, "enabled": true},
-				"pro_20x": gin.H{"key": "pro_20x", "label": "Pro 20x", "serviceFeeUsdMinor": 1000, "service_fee_usd": 10, "enabled": true},
+				"plus":       gin.H{"key": "plus", "label": "Plus", "serviceFeeUsdMinor": 100, "service_fee_usd": 1, "enabled": true},
+				"pro_5x":     gin.H{"key": "pro_5x", "label": "Pro 5x", "serviceFeeUsdMinor": 500, "service_fee_usd": 5, "enabled": true},
+				"pro_20x":    gin.H{"key": "pro_20x", "label": "Pro 20x", "serviceFeeUsdMinor": 1000, "service_fee_usd": 10, "enabled": true},
+				"credit250":  gin.H{"key": "credit250", "label": "Codex 点数 250", "serviceFeeUsdMinor": 10, "service_fee_usd": 0.1, "enabled": true},
+				"credit500":  gin.H{"key": "credit500", "label": "Codex 点数 500", "serviceFeeUsdMinor": 10, "service_fee_usd": 0.1, "enabled": true},
+				"credit1000": gin.H{"key": "credit1000", "label": "Codex 点数 1000", "serviceFeeUsdMinor": 10, "service_fee_usd": 0.1, "enabled": true},
 			},
 		})
 		return
@@ -1097,12 +1121,12 @@ func PublicCDKPlans(c *gin.Context) {
 			p.Key = k
 		}
 		m[k] = gin.H{
-			"key":                p.Key,
-			"label":              p.Label,
-			"currency":           p.Currency,
-			"enabled":            p.Enabled,
-			"serviceFeeUsdMinor": p.ServiceFeeUsdMinor,
-			"service_fee_usd":    cardplatform.MinorToUSD(p.ServiceFeeUsdMinor),
+			"key":                 p.Key,
+			"label":               p.Label,
+			"currency":            p.Currency,
+			"enabled":             p.Enabled,
+			"serviceFeeUsdMinor":  p.ServiceFeeUsdMinor,
+			"service_fee_usd":     cardplatform.MinorToUSD(p.ServiceFeeUsdMinor),
 			"expectedAmountMinor": p.ExpectedAmountMinor,
 		}
 	}
@@ -1186,7 +1210,6 @@ func looksLikeBareAccessToken(raw string) bool {
 	}
 	return len(strings.Split(s, ".")) == 3
 }
-
 
 // CardPlatformSetCDKNote PUT /api/v1/admin/cardplatform/cdks/:id/note
 // 本站备注（不写卡台）；空 note 表示清空。

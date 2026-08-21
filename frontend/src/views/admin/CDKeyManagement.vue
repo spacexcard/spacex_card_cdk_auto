@@ -133,9 +133,7 @@
           <el-option v-for="s in statusOptions" :key="s" :label="statusLabel(s)" :value="s" />
         </el-select>
         <el-select v-model="listPlan" clearable placeholder="套餐" class="!w-[120px]" @change="searchList">
-          <el-option label="Plus" value="plus" />
-          <el-option label="Pro 5x" value="pro_5x" />
-          <el-option label="Pro 20x" value="pro_20x" />
+          <el-option v-for="k in planKeys" :key="k" :label="planLabel(k)" :value="k" />
         </el-select>
         <el-button type="primary" :loading="loadingList" @click="searchList">查询</el-button>
         <el-button :loading="loadingList" @click="loadList">刷新</el-button>
@@ -356,15 +354,25 @@ const listStatus = ref('')
 const listPlan = ref('')
 const statusOptions = ['unused', 'reserved', 'consumed', 'frozen', 'disabled', 'review']
 
+// 展示顺序：已知档位按此排，卡台以后新增的档位自动排在后面。
+// ★不要用写死的列表去过滤★——写死会让卡台新开的档位（如 Codex 点数）
+// 永远出不来，代理明明能发码却在界面上看不到。
+const PLAN_ORDER = ['go', 'plus', 'pro_5x', 'pro_20x', 'credit250', 'credit500', 'credit1000']
+const planKeys = computed(() => {
+  const fromServer = Object.keys(plans.value || {})
+  const known = PLAN_ORDER.filter((k) => fromServer.includes(k))
+  const extra = fromServer.filter((k) => !PLAN_ORDER.includes(k)).sort()
+  return [...known, ...extra]
+})
+
 const planCards = computed(() => {
-  const order = ['plus', 'pro_5x', 'pro_20x']
-  return order.map((k) => {
+  return planKeys.value.map((k) => {
     const p = plans.value[k] || {}
     return {
       key: k,
       label: p.label || k,
       enabled: p.enabled !== false,
-      service_fee_usd: p.service_fee_usd ?? feeDefault(k),
+      service_fee_usd: p.service_fee_usd ?? null,
       serviceFeeUsdMinor: p.serviceFeeUsdMinor,
     }
   })
@@ -814,14 +822,17 @@ async function batchClearNoteSelected() {
   }
 }
 
-function feeDefault(k: string) {
-  return k === 'plus' ? 1 : k === 'pro_5x' ? 5 : 10
+// ★服务费只认卡台下发的值，猜不到就显示「—」★
+// 原实现对任何未知档位一律返回 10：Codex 点数实际是 $0.10，
+// 会被显示成 $10（差 100 倍），代理按这个数字定价就直接亏钱。
+function feeDefault(_k: string): number | null {
+  return null
 }
 function feeOf(k: string) {
   const p = plans.value[k]
   if (p?.service_fee_usd != null) return Number(p.service_fee_usd).toFixed(2)
   if (p?.serviceFeeUsdMinor != null) return (p.serviceFeeUsdMinor / 100).toFixed(2)
-  return feeDefault(k).toFixed(2)
+  return '—'
 }
 function formatUsd(v: any) {
   const n = Number(v)
@@ -833,10 +844,16 @@ function planLabel(k: string) {
   if (k === 'plus') return 'Plus'
   if (k === 'pro_5x') return 'Pro 5x'
   if (k === 'pro_20x') return 'Pro 20x'
+  if (k === 'credit250') return 'Codex 点数 250'
+  if (k === 'credit500') return 'Codex 点数 500'
+  if (k === 'credit1000') return 'Codex 点数 1000'
   return k
 }
 const estimatedTotal = computed(() => {
+  // 服务费拿不到时 feeOf 返回「—」，Number('—') 是 NaN，
+  // 按钮上会显示「购买 3 张 · $NaN」。宁可显示「—」也不要给代理看一个假数字。
   const unit = Number(feeOf(form.plan))
+  if (!Number.isFinite(unit)) return '—'
   const c = Math.max(1, Math.min(50, form.count || 1))
   return (unit * c).toFixed(2)
 })
