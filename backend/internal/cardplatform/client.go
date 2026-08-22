@@ -175,9 +175,21 @@ type PlanInfo struct {
 	MaxAmountMinor      int64  `json:"maxAmountMinor,omitempty"`
 }
 
+// PlanRegistryItem 卡台档位注册表的元信息（展示顺序/文案/性质）。
+// ★代理侧不要再维护档位清单★——卡台后台新增的档位会自动出现在这里。
+type PlanRegistryItem struct {
+	Key                        string `json:"key"`
+	Label                      string `json:"label"`
+	Flow                       string `json:"flow"`
+	SortOrder                  int    `json:"sort_order"`
+	IsCredit                   bool   `json:"is_credit"`
+	RequiresActiveSubscription bool   `json:"requires_active_subscription"`
+}
+
 type PlansResponse struct {
-	Version int64               `json:"version"`
-	Plans   map[string]PlanInfo `json:"plans"`
+	Version  int64               `json:"version"`
+	Plans    map[string]PlanInfo `json:"plans"`
+	Registry []PlanRegistryItem  `json:"registry,omitempty"`
 }
 
 // GetPlans GET /gpt-direct/plans — 实时服务费与套餐开关
@@ -197,6 +209,14 @@ func (c *Client) GetPlans(ctx context.Context) (*PlansResponse, error) {
 		var ver int64
 		_ = json.Unmarshal(v, &ver)
 		out.Version = ver
+	}
+	// 档位注册表（展示顺序/文案/性质）——卡台后台新增的档位会自动出现在这里，
+	// 代理侧不必再维护一份档位清单。老版本卡台没有这个字段，缺失即为空，不影响。
+	if reg, has := raw["registry"]; has {
+		var items []PlanRegistryItem
+		if err := json.Unmarshal(reg, &items); err == nil {
+			out.Registry = items
+		}
 	}
 	plansRaw, ok := raw["plans"]
 	if !ok {

@@ -1130,7 +1130,13 @@ func PublicCDKPlans(c *gin.Context) {
 			"expectedAmountMinor": p.ExpectedAmountMinor,
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{"version": plans.Version, "source": "cardplatform_live", "plans": m})
+	c.JSON(http.StatusOK, gin.H{
+		"version": plans.Version,
+		"source":  "cardplatform_live",
+		"plans":   m,
+		// 档位展示顺序/文案/性质：前端据此渲染，不再维护自己的档位清单
+		"registry": plans.Registry,
+	})
 }
 
 func str(v any) string {

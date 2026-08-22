@@ -354,16 +354,18 @@ const listStatus = ref('')
 const listPlan = ref('')
 const statusOptions = ['unused', 'reserved', 'consumed', 'frozen', 'disabled', 'review']
 
-// 展示顺序：已知档位按此排，卡台以后新增的档位自动排在后面。
-// ★不要用写死的列表去过滤★——写死会让卡台新开的档位（如 Codex 点数）
-// 永远出不来，代理明明能发码却在界面上看不到。
-const PLAN_ORDER = ['go', 'plus', 'pro_5x', 'pro_20x', 'credit250', 'credit500', 'credit1000']
+// 档位清单与展示顺序全部来自卡台档位注册表。
+// ★代理侧不再维护任何档位清单★——卡台后台新增的档位会自动出现在这里；
+// 写死过一次的代价：卡台开了 Codex 点数，代理明明能发码却在界面上看不到。
+const planRegistry = ref<any[]>([])
 const planKeys = computed(() => {
-  const fromServer = Object.keys(plans.value || {})
-  const known = PLAN_ORDER.filter((k) => fromServer.includes(k))
-  const extra = fromServer.filter((k) => !PLAN_ORDER.includes(k)).sort()
-  return [...known, ...extra]
+  if (planRegistry.value.length) return planRegistry.value.map((r: any) => r.key)
+  // 老版本卡台没有 registry 字段时，回落成「定价里有什么就显示什么」
+  return Object.keys(plans.value || {}).sort()
 })
+function planMeta(k: string) {
+  return planRegistry.value.find((r: any) => r.key === k) || null
+}
 
 const planCards = computed(() => {
   return planKeys.value.map((k) => {
@@ -839,15 +841,9 @@ function formatUsd(v: any) {
   return Number.isFinite(n) ? n.toFixed(2) : '—'
 }
 function planLabel(k: string) {
-  const p = plans.value[k]
-  if (p?.label) return p.label
-  if (k === 'plus') return 'Plus'
-  if (k === 'pro_5x') return 'Pro 5x'
-  if (k === 'pro_20x') return 'Pro 20x'
-  if (k === 'credit250') return 'Codex 点数 250'
-  if (k === 'credit500') return 'Codex 点数 500'
-  if (k === 'credit1000') return 'Codex 点数 1000'
-  return k
+  // 文案以卡台注册表为准，其次是定价配置里的 label，最后退回裸键。
+  // ★不要在代理侧维护档位文案★——卡台改名或加档，这里会立刻不一致。
+  return planMeta(k)?.label || plans.value[k]?.label || k
 }
 const estimatedTotal = computed(() => {
   // 服务费拿不到时 feeOf 返回「—」，Number('—') 是 NaN，
@@ -1091,6 +1087,8 @@ async function loadMeta() {
     if (pr.ok) {
       const d = await pr.json()
       plans.value = d.plans || {}
+      // 档位清单与文案来自卡台注册表；老版本卡台没有这个字段，回落成按定价键渲染
+      planRegistry.value = d.registry || []
       pricingVersion.value = d.version ?? null
       priceSource.value = 'live'
     } else {
