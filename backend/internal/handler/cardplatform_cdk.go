@@ -63,25 +63,21 @@ func CardPlatformPlans(c *gin.Context) {
 		writeCardErr(c, err)
 		return
 	}
-	// 附加美元展示字段，方便前端
-	type planView struct {
-		cardplatform.PlanInfo
-		ServiceFeeUSD float64 `json:"service_fee_usd"`
+	// ★只下发「能发码也能兑换」的档位★——过滤在服务端，前端拿不到就渲染不出。
+	// 放在前端过滤的话，每加一个界面就要记得再过滤一次；这次线上就是这么漏的：
+	// 卡台透传了 ACC 的 claude_* 定价键，代理后台照单全列，还能发码。
+	sellable := plans.SellablePlans()
+	m := map[string]cardplatform.SellablePlan{}
+	for _, p := range sellable {
+		m[p.Key] = p
 	}
-	out := gin.H{
+	c.JSON(http.StatusOK, gin.H{
 		"version": plans.Version,
-		"plans":   map[string]planView{},
+		"plans":   m,
 		"base":    cardplatform.LoadConfig().SiteBase,
-	}
-	m := map[string]planView{}
-	for k, p := range plans.Plans {
-		if p.Key == "" {
-			p.Key = k
-		}
-		m[k] = planView{PlanInfo: p, ServiceFeeUSD: cardplatform.MinorToUSD(p.ServiceFeeUsdMinor)}
-	}
-	out["plans"] = m
-	c.JSON(http.StatusOK, out)
+		// 展示顺序/文案/性质仍以卡台注册表为准，前端不维护档位清单
+		"registry": sellable,
+	})
 }
 
 // CardPlatformBalance GET /api/v1/admin/cardplatform/balance
@@ -115,16 +111,25 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 	// ★档位以卡台实时下发为准，不要在这里写死白名单★
 	// 写死的话，卡台每开一个新档位（Codex 点数 credit250/500/1000）这里都会 400 挡下，
 	// 代理明明有权限发码却发不出来，而且报错还指向一个过期的档位清单。
-	// 卡台侧本来就会再校验一次，这里只做「拿得到档位表就按表校验」的前置拦截。
+	//
+	// 但「实时下发」≠「定价表里有就能卖」：卡台透传的是 ACC 的整张定价表，
+	// 里面有 claude_*（没有 CDK 兑换流程）也有 enabled=false 的档（兑换时被 ACC 挡）。
+	// 按 SellableKeys 校验，跟界面上能看到的是同一份，不会出现「看得见发不出」
+	// 或者「发得出兑不掉」。
 	if cli := cardplatform.NewFromSettings(); cli != nil {
 		if plans, err := cli.GetPlans(c.Request.Context()); err == nil && plans != nil && len(plans.Plans) > 0 {
-			if _, ok := plans.Plans[plan]; !ok {
-				known := make([]string, 0, len(plans.Plans))
-				for k := range plans.Plans {
+			sellable := plans.SellableKeys()
+			if len(sellable) > 0 && !sellable[plan] {
+				known := make([]string, 0, len(sellable))
+				for k := range sellable {
 					known = append(known, k)
 				}
 				sort.Strings(known)
-				c.JSON(http.StatusBadRequest, gin.H{"error": "unknown plan: " + plan + "; available: " + strings.Join(known, " | ")})
+				reason := "unknown plan"
+				if _, exists := plans.Plans[plan]; exists {
+					reason = "plan not open for CDK（卡台未开放本档位，或 ACC 定价里是停用状态）"
+				}
+				c.JSON(http.StatusBadRequest, gin.H{"error": reason + ": " + plan + "; available: " + strings.Join(known, " | ")})
 				return
 			}
 		}
@@ -1076,24 +1081,50 @@ func shortTok(tok string) string {
 }
 
 // PublicCDKPlans GET /api/v1/public/cdk/plans
+const docsDefaultNote = "★这是文档默认兜底价，不是你的账户实时价★：配置卡台 API Key 后才会返回实时值。" +
+	"档位是否开放、点数的比索付款价，一律以卡台实时返回为准。"
+
+// docsDefaultRegistry 未配置 API Key / 卡台不可达时的参考价目表。
+//
+// ★点数必须带上 checkout_amount_minor★：点数的 $0.10 只是我们的服务费，
+// 代理真正要垫的是那笔比索付款（₱565/₱1130/₱2260）。只列服务费的话，
+// 代理会把「一张 ₱2260 的码」当成一毛钱的东西发出去。
+func docsDefaultRegistry() []cardplatform.SellablePlan {
+	return []cardplatform.SellablePlan{
+		{Key: "plus", Label: "Plus", Flow: "direct", SortOrder: 2, ServiceFeeUsdMinor: 100, ServiceFeeUSD: 1},
+		{Key: "pro_5x", Label: "Pro 5x", Flow: "direct", SortOrder: 3, ServiceFeeUsdMinor: 500, ServiceFeeUSD: 5},
+		{Key: "pro_20x", Label: "Pro", Flow: "plus_upgrade", SortOrder: 4, ServiceFeeUsdMinor: 1000, ServiceFeeUSD: 10},
+		{Key: "credit250", Label: "Codex 点数 250", Flow: "credit", SortOrder: 5, IsCredit: true,
+			RequiresActiveSubscription: true, ServiceFeeUsdMinor: 10, ServiceFeeUSD: 0.1,
+			CheckoutCurrency: "PHP", CheckoutAmountMinor: 56500},
+		{Key: "credit500", Label: "Codex 点数 500", Flow: "credit", SortOrder: 6, IsCredit: true,
+			RequiresActiveSubscription: true, ServiceFeeUsdMinor: 10, ServiceFeeUSD: 0.1,
+			CheckoutCurrency: "PHP", CheckoutAmountMinor: 113000},
+		{Key: "credit1000", Label: "Codex 点数 1000", Flow: "credit", SortOrder: 7, IsCredit: true,
+			RequiresActiveSubscription: true, ServiceFeeUsdMinor: 10, ServiceFeeUSD: 0.1,
+			CheckoutCurrency: "PHP", CheckoutAmountMinor: 226000},
+	}
+}
+
+func docsDefaultPlans() map[string]cardplatform.SellablePlan {
+	out := map[string]cardplatform.SellablePlan{}
+	for _, p := range docsDefaultRegistry() {
+		out[p.Key] = p
+	}
+	return out
+}
+
 // 公开展示服务费参考价（不暴露 API Key；若未配置 Key 则返回文档默认价）
 func PublicCDKPlans(c *gin.Context) {
 	cli := cardplatform.NewFromSettings()
 	cfg := cardplatform.LoadConfig()
 	if cfg.APIKey == "" {
-		// 文档默认服务费（美分）
 		c.JSON(http.StatusOK, gin.H{
-			"version": 0,
-			"source":  "docs_default",
-			"plans": map[string]any{
-				"plus":       gin.H{"key": "plus", "label": "Plus", "serviceFeeUsdMinor": 100, "service_fee_usd": 1, "enabled": true},
-				"pro_5x":     gin.H{"key": "pro_5x", "label": "Pro 5x", "serviceFeeUsdMinor": 500, "service_fee_usd": 5, "enabled": true},
-				"pro_20x":    gin.H{"key": "pro_20x", "label": "Pro 20x", "serviceFeeUsdMinor": 1000, "service_fee_usd": 10, "enabled": true},
-				"credit250":  gin.H{"key": "credit250", "label": "Codex 点数 250", "serviceFeeUsdMinor": 10, "service_fee_usd": 0.1, "enabled": true},
-				"credit500":  gin.H{"key": "credit500", "label": "Codex 点数 500", "serviceFeeUsdMinor": 10, "service_fee_usd": 0.1, "enabled": true},
-				"credit1000": gin.H{"key": "credit1000", "label": "Codex 点数 1000", "serviceFeeUsdMinor": 10, "service_fee_usd": 0.1, "enabled": true},
-			},
-			"note": "★这是文档默认兜底价，不是你的账户实时价★：配置卡台 API Key 后才会返回实时值。点数档位是否开放同样以卡台实时返回为准。",
+			"version":  0,
+			"source":   "docs_default",
+			"plans":    docsDefaultPlans(),
+			"registry": docsDefaultRegistry(),
+			"note":     docsDefaultNote,
 		})
 		return
 	}
@@ -1101,41 +1132,28 @@ func PublicCDKPlans(c *gin.Context) {
 	if err != nil {
 		// 降级文档默认
 		c.JSON(http.StatusOK, gin.H{
-			"version": 0,
-			"source":  "docs_default_fallback",
-			"error":   err.Error(),
-			"plans": map[string]any{
-				"plus":       gin.H{"key": "plus", "label": "Plus", "serviceFeeUsdMinor": 100, "service_fee_usd": 1, "enabled": true},
-				"pro_5x":     gin.H{"key": "pro_5x", "label": "Pro 5x", "serviceFeeUsdMinor": 500, "service_fee_usd": 5, "enabled": true},
-				"pro_20x":    gin.H{"key": "pro_20x", "label": "Pro 20x", "serviceFeeUsdMinor": 1000, "service_fee_usd": 10, "enabled": true},
-				"credit250":  gin.H{"key": "credit250", "label": "Codex 点数 250", "serviceFeeUsdMinor": 10, "service_fee_usd": 0.1, "enabled": true},
-				"credit500":  gin.H{"key": "credit500", "label": "Codex 点数 500", "serviceFeeUsdMinor": 10, "service_fee_usd": 0.1, "enabled": true},
-				"credit1000": gin.H{"key": "credit1000", "label": "Codex 点数 1000", "serviceFeeUsdMinor": 10, "service_fee_usd": 0.1, "enabled": true},
-			},
+			"version":  0,
+			"source":   "docs_default_fallback",
+			"error":    err.Error(),
+			"plans":    docsDefaultPlans(),
+			"registry": docsDefaultRegistry(),
+			"note":     docsDefaultNote,
 		})
 		return
 	}
+	// 同 CardPlatformPlans：只公开真能买到的档位。
+	// 公开页比后台更不能乱列——列了 Claude，客户会照着去问「怎么买不到」。
+	sellable := plans.SellablePlans()
 	m := map[string]any{}
-	for k, p := range plans.Plans {
-		if p.Key == "" {
-			p.Key = k
-		}
-		m[k] = gin.H{
-			"key":                 p.Key,
-			"label":               p.Label,
-			"currency":            p.Currency,
-			"enabled":             p.Enabled,
-			"serviceFeeUsdMinor":  p.ServiceFeeUsdMinor,
-			"service_fee_usd":     cardplatform.MinorToUSD(p.ServiceFeeUsdMinor),
-			"expectedAmountMinor": p.ExpectedAmountMinor,
-		}
+	for _, p := range sellable {
+		m[p.Key] = p
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"version": plans.Version,
 		"source":  "cardplatform_live",
 		"plans":   m,
 		// 档位展示顺序/文案/性质：前端据此渲染，不再维护自己的档位清单
-		"registry": plans.Registry,
+		"registry": sellable,
 	})
 }
 

@@ -55,12 +55,13 @@
             :key="p.key"
             type="button"
             class="plan-card-sm"
-            :class="{ 'plan-card-sm--on': form.plan === p.key, 'opacity-50': !p.enabled }"
-            :disabled="!p.enabled"
+            :class="{ 'plan-card-sm--on': form.plan === p.key }"
             @click="selectPlan(p.key)"
           >
             <span class="font-medium">{{ p.label }}</span>
             <span class="mono text-ink">${{ formatUsd(p.service_fee_usd) }}</span>
+            <!-- 点数是比索计价：兑换时代理要垫这笔付款，不写出来会被当成只花 $0.10 -->
+            <small v-if="p.checkoutText" class="text-xs text-muted">兑换垫付 {{ p.checkoutText }}</small>
           </button>
         </div>
         <div class="flex flex-wrap items-center gap-3">
@@ -295,7 +296,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { authFetch } from '../../lib/api'
 import { dialog } from '../../lib/dialog'
 import { copyToClipboard } from '../../lib/clipboard'
@@ -354,35 +355,51 @@ const listStatus = ref('')
 const listPlan = ref('')
 const statusOptions = ['unused', 'reserved', 'consumed', 'frozen', 'disabled', 'review']
 
-// 档位清单与展示顺序全部来自卡台档位注册表。
-// ★代理侧不再维护任何档位清单★——卡台后台新增的档位会自动出现在这里；
-// 写死过一次的代价：卡台开了 Codex 点数，代理明明能发码却在界面上看不到。
+// 档位清单、展示顺序、能不能卖，全部由服务端下发的 registry 决定。
+// ★代理侧不再维护任何档位清单，也不再自己判断可见性★
+// 写死清单的代价见过一次：卡台开了 Codex 点数，代理明明能发码却在界面上看不到。
+// 自己判可见性的代价也见过一次（2026-08-22 线上）：Claude 档位混进来还能发码——
+// 它在 ACC 定价表里 enabled=true，但我们根本没有 Claude 兑换流程。
+// 服务端已按「卡台注册表 ∩ ACC 定价开关」过滤，这里直接用，不要再加回落分支。
 const planRegistry = ref<any[]>([])
-const planKeys = computed(() => {
-  if (planRegistry.value.length) return planRegistry.value.map((r: any) => r.key)
-  // 老版本卡台没有 registry 字段时，回落成「定价里有什么就显示什么」
-  return Object.keys(plans.value || {}).sort()
-})
+const planKeys = computed(() => planRegistry.value.map((r: any) => r.key))
 function planMeta(k: string) {
   return planRegistry.value.find((r: any) => r.key === k) || null
 }
 
-const planCards = computed(() => {
-  return planKeys.value.map((k) => {
-    const p = plans.value[k] || {}
-    return {
-      key: k,
-      label: p.label || k,
-      enabled: p.enabled !== false,
-      service_fee_usd: p.service_fee_usd ?? null,
-      serviceFeeUsdMinor: p.serviceFeeUsdMinor,
-    }
-  })
-})
+// 点数档真正要垫的是比索付款，$0.10 只是我们的服务费。
+// 只显示服务费的话，代理会把一张 ₱2260 的码当成一毛钱的东西发出去。
+function checkoutText(meta: any): string {
+  if (!meta?.checkout_amount_minor) return ''
+  const cur = meta.checkout_currency || 'PHP'
+  const amount = (Number(meta.checkout_amount_minor) / 100).toFixed(2)
+  return `${cur} ${amount}`
+}
+
+const planCards = computed(() =>
+  planRegistry.value.map((meta: any) => ({
+    key: meta.key,
+    label: meta.label || meta.key,
+    enabled: true, // 服务端只下发可卖档位
+    service_fee_usd: meta.service_fee_usd ?? null,
+    serviceFeeUsdMinor: meta.serviceFeeUsdMinor,
+    isCredit: !!meta.is_credit,
+    checkoutText: checkoutText(meta),
+    requiresActiveSubscription: !!meta.requires_active_subscription,
+  })),
+)
 
 const canIssue = computed(() =>
-  configured.value && form.funding_confirmed && form.count >= 1 && form.count <= 50 && !issuing.value,
+  configured.value && form.funding_confirmed && form.count >= 1 && form.count <= 50 && !issuing.value &&
+  // 选中的档位必须在可卖清单里：默认值 plus 也可能被卡台/ACC 关掉，
+  // 不判的话按钮是亮的、点下去被后端 400 挡回来。
+  planKeys.value.includes(form.plan),
 )
+
+// 可卖清单变了（首次加载 / 卡台改了配置）就把选中项收回到清单内。
+watch(planKeys, (keys) => {
+  if (keys.length && !keys.includes(form.plan)) form.plan = keys[0]
+})
 
 /** 列表行：合并服务器 full_code + 本机兜底缓存 */
 const displayRows = computed(() =>
@@ -1087,19 +1104,18 @@ async function loadMeta() {
     if (pr.ok) {
       const d = await pr.json()
       plans.value = d.plans || {}
-      // 档位清单与文案来自卡台注册表；老版本卡台没有这个字段，回落成按定价键渲染
+      // 服务端已按「卡台注册表 ∩ ACC 定价开关」过滤，这里拿到什么就显示什么
       planRegistry.value = d.registry || []
       pricingVersion.value = d.version ?? null
       priceSource.value = 'live'
     } else {
       const d = await pr.json().catch(() => ({}))
       metaError.value = d.error || d.msg || '无法获取实时价格（检查 Key / 出口 IP 白名单）'
-      plans.value = {
-        plus: { label: 'Plus', service_fee_usd: 1, serviceFeeUsdMinor: 100, enabled: true },
-        pro_5x: { label: 'Pro 5x', service_fee_usd: 5, serviceFeeUsdMinor: 500, enabled: true },
-        pro_20x: { label: 'Pro 20x', service_fee_usd: 10, serviceFeeUsdMinor: 1000, enabled: true },
-      }
-      priceSource.value = 'docs default'
+      // ★取不到实时档位时不要编一份出来★：这里编的清单既不知道卡台开了哪些档，
+      // 也不知道 ACC 的开关状态，照着它发码就是在赌。清空 + 上面的报错更诚实。
+      plans.value = {}
+      planRegistry.value = []
+      priceSource.value = 'unavailable'
     }
     if (br.ok) {
       const b = await br.json()

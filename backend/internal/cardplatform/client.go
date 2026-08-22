@@ -181,9 +181,15 @@ type PlanRegistryItem struct {
 	Key                        string `json:"key"`
 	Label                      string `json:"label"`
 	Flow                       string `json:"flow"`
+	Tier                       int    `json:"tier"`
 	SortOrder                  int    `json:"sort_order"`
 	IsCredit                   bool   `json:"is_credit"`
 	RequiresActiveSubscription bool   `json:"requires_active_subscription"`
+	// 上游实际付款价（点数是 PHP 计价，不是美元）。
+	// ★漏接这两个字段的代价★：点数档在界面上只剩服务费 $0.10，
+	// 代理看不到「这张码兑换时要垫 ₱565」，把点数当成一美元不到的东西发。
+	CheckoutCurrency    string `json:"checkout_currency"`
+	CheckoutAmountMinor int64  `json:"checkout_amount_minor"`
 }
 
 type PlansResponse struct {

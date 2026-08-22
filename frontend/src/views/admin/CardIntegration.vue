@@ -182,10 +182,13 @@
         <div v-for="p in planCards" :key="p.key" class="result-tile text-center">
           <div class="k">{{ p.label }}</div>
           <div class="v mono text-2xl" style="color: var(--primary)">${{ p.fee }}</div>
-          <div class="text-xs text-subtle mt-1">/ 张 · {{ p.enabled ? '可购' : '暂停' }}</div>
+          <div class="text-xs text-subtle mt-1">/ 张 · 可购</div>
+          <!-- 点数按比索计价：服务费之外还要垫这笔上游付款 -->
+          <div v-if="p.checkout" class="text-xs text-subtle">兑换垫付 {{ p.checkout }}</div>
           <div v-if="p.minor != null" class="text-xs text-subtle">minor {{ p.minor }}</div>
         </div>
       </div>
+      <el-empty v-if="!planCards.length" description="卡台未开放任何可发码档位" :image-size="60" />
       <el-alert
         v-if="feeAllZero"
         class="mt-3"
@@ -259,32 +262,26 @@ const presetActive = computed(() => {
   return ''
 })
 
-const planCards = computed(() => {
-  const order = [
-    { key: 'go', def: 1, label: 'Go' },
-    { key: 'plus', def: 1, label: 'Plus' },
-    { key: 'pro_5x', def: 5, label: 'Pro 5x' },
-    { key: 'pro_20x', def: 10, label: 'Pro 20x' },
-  ]
-  return order.map((o) => {
-    const p = plansRaw.value[o.key] || {}
-    let minor = p.serviceFeeUsdMinor ?? p.service_fee_usd_minor
-    if (minor == null && p.service_fee_usd != null) minor = Math.round(Number(p.service_fee_usd) * 100)
+// 档位清单来自服务端下发的 registry（已按「卡台注册表 ∩ ACC 定价开关」过滤）。
+// 这里原来写死 go/plus/pro_5x/pro_20x，两头都不对：卡台新开的点数档看不到，
+// 卡台/ACC 关掉的档还照样列。
+const planRegistry = ref<any[]>([])
+const planCards = computed(() =>
+  planRegistry.value.map((p: any) => {
+    const minor = p.serviceFeeUsdMinor ?? p.service_fee_usd_minor
     const fee =
       minor != null && minor !== ''
         ? (Number(minor) / 100).toFixed(2)
         : p.service_fee_usd != null
           ? Number(p.service_fee_usd).toFixed(2)
-          : o.def.toFixed(2)
-    return {
-      key: o.key,
-      label: p.label || o.label,
-      fee,
-      minor,
-      enabled: p.enabled !== false,
-    }
-  })
-})
+          : '—'
+    // 点数按比索计价，服务费之外还要垫这笔付款
+    const checkout = p.checkout_amount_minor
+      ? `${p.checkout_currency || 'PHP'} ${(Number(p.checkout_amount_minor) / 100).toFixed(2)}`
+      : ''
+    return { key: p.key, label: p.label || p.key, fee, minor, checkout, enabled: true }
+  }),
+)
 const feeSummary = computed(() =>
   planCards.value.map((p) => `$${p.fee}`).join(' / ') || '—',
 )
@@ -383,6 +380,7 @@ async function loadPlans() {
       return
     }
     plansRaw.value = d.plans || {}
+    planRegistry.value = d.registry || []
     plansVersion.value = d.version ?? null
     dialog.toast('价格已更新', 'ok')
     dlgPlans.value = true

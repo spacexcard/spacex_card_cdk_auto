@@ -65,14 +65,17 @@ func doSync(ctx context.Context) (SyncResult, error) {
 	cli := cardplatform.New(cfg)
 	var res SyncResult
 
-	// 1. 同步逻辑套餐（plus / pro_5x / pro_20x）
+	// 1. 同步逻辑套餐。
+	// ★只同步可卖档位★：卡台透传的是 ACC 的整张定价表，里面有 claude_*（本系统
+	// 没有兑换流程）。全量写进 plan_status_cache 的话，选卡规则页会冒出一堆
+	// 根本配不了卡的档位，运营还得去猜哪些是能用的。
 	plans, err := cli.GetPlans(ctx)
 	if err != nil {
 		return res, err
 	}
-	for key, p := range plans.Plans {
-		if err := db.UpsertPlanStatus(key, p.Label, p.Enabled, p.ServiceFeeUsdMinor); err != nil {
-			log.Printf("[plan-sync] upsert plan %s: %v", key, err)
+	for _, p := range plans.SellablePlans() {
+		if err := db.UpsertPlanStatus(p.Key, p.Label, true, p.ServiceFeeUsdMinor); err != nil {
+			log.Printf("[plan-sync] upsert plan %s: %v", p.Key, err)
 		} else {
 			res.Plans++
 		}
